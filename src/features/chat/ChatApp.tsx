@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, SVGProps, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -55,6 +55,22 @@ const ContactAvatar = ({
     </div>
   );
 };
+
+const SettingsIcon = ({ className = 'h-5 w-5', ...props }: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    {...props}
+  >
+    <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.89 3.31.876 2.42 2.42a1.724 1.724 0 0 0 1.065 2.572c1.757.426 1.757 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.89 1.543-.876 3.31-2.42 2.42a1.724 1.724 0 0 0-2.572 1.065c-.426 1.757-2.924 1.757-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.89-3.31-.876-2.42-2.42a1.724 1.724 0 0 0-1.065-2.572c-1.757-.426-1.757-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.89-1.543.876-3.31 2.42-2.42a1.724 1.724 0 0 0 2.572-1.065z" />
+    <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
+  </svg>
+);
 
 type ContactSidebarProps = {
   contacts: Contact[];
@@ -566,7 +582,7 @@ const ChatApp = () => {
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-white/10 via-white/5 to-white/10">
-      <div className="flex flex-1 flex-col sm:flex-row">
+      <div className="flex flex-1 min-h-0 flex-col sm:flex-row">
         <ContactSidebar
           contacts={contacts ?? []}
           activeContactId={contactId}
@@ -574,63 +590,31 @@ const ChatApp = () => {
           onCreate={() => setShowDialog(true)}
         />
 
-        <section className="flex flex-1 flex-col bg-white/10 shadow-2xl shadow-black/20 backdrop-blur-2xl">
-          <header className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-4 sm:px-6">
-            <div className="flex flex-1 items-center gap-3">
-              <div className="flex items-center gap-2 sm:hidden">
-                <button
-                  onClick={handleBackToContacts}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
-                >
-                  ← 联系人
-                </button>
-                <button
-                  onClick={() => setIsDetailsOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
-                  disabled={!activeContact}
-                >
-                  角色详情
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                {activeContact ? (
-                  <ContactAvatar contact={activeContact} className="hidden sm:flex" />
-                ) : (
-                  <div className="hidden h-10 w-10 items-center justify-center rounded-2xl text-base font-semibold uppercase text-white sm:flex">
-                    AI
-                  </div>
-                )}
-                <div>
-                  <h1 className="text-base font-semibold text-white">
-                    {activeContact ? activeContact.name : 'AI 角色对话'}
-                  </h1>
-                  <p className="text-xs text-white/60 line-clamp-1">
-                    {activeContact?.prompt || '设置角色以获得更真实的扮演体验。'}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="hidden items-center gap-2 sm:flex">
-              <button
-                onClick={() => setIsDetailsOpen(true)}
-                disabled={!activeContact}
-                className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                角色详情
-              </button>
-              <Link
-                to="/"
-                className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
-              >
-                主屏
-              </Link>
-              <div className="rounded-full bg-white/20 px-4 py-1 text-xs text-white/80 shadow-inner">
-                {settings.model || '未选择模型'}
-              </div>
-            </div>
+        <section
+          className="flex flex-1 min-h-0 flex-col overflow-hidden bg-white/10 shadow-2xl shadow-black/20 backdrop-blur-2xl"
+        >
+          <header className="grid grid-cols-[auto,1fr,auto] flex-none items-center border-b border-white/10 px-4 py-4 sm:px-6">
+            <button
+              onClick={handleBackToContacts}
+              aria-label="返回联系人列表"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:border-white/40 hover:bg-white/20"
+            >
+              ←
+            </button>
+            <h1 className="truncate text-center text-base font-semibold text-white">
+              {activeContact ? activeContact.name : 'AI 角色对话'}
+            </h1>
+            <button
+              onClick={() => setIsDetailsOpen(true)}
+              disabled={!activeContact}
+              aria-label="打开角色详情"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:border-white/40 hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <SettingsIcon />
+            </button>
           </header>
 
-          <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8">
+          <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8">
             {messages && messages.length > 0 ? (
               messages.map((message) => (
                 <MessageBubble key={message.id ?? message.createdAt} message={message} />
@@ -642,19 +626,19 @@ const ChatApp = () => {
             )}
           </div>
 
-          <footer className="border-t border-white/10 bg-white/10 px-4 py-4 sm:px-8">
+          <footer className="flex flex-none flex-col border-t border-white/10 bg-white/10 px-4 py-4 sm:px-8">
             {error ? (
               <div className="mb-2 rounded-2xl bg-red-500/20 px-4 py-2 text-xs text-red-200">
                 {error}
               </div>
             ) : null}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex items-center gap-3">
               <textarea
                 value={inputValue}
                 onChange={(event) => setInputValue(event.target.value)}
                 rows={2}
                 placeholder={activeContact ? '输入消息...' : '请先创建或选择一个角色'}
-                className="min-h-[72px] flex-1 rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60"
+                className="min-h-[56px] flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60"
                 disabled={!activeThread}
               />
               <button
