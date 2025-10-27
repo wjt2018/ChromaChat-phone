@@ -1,26 +1,32 @@
 import { db, Message, MessageRole, Thread, Contact } from './db';
 import { chatCompletion, ChatMessage } from './llmClient';
 import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
+import { ContactIconName, getRandomContactIcon } from '../constants/icons';
 
 const generateId = () => crypto.randomUUID();
 
 export const createContact = async ({
   name,
   avatarColor,
+  avatarIcon,
   avatarUrl,
   prompt,
   worldBook
 }: {
   name: string;
   avatarColor: string;
+  avatarIcon?: ContactIconName;
   avatarUrl?: string;
   prompt: string;
   worldBook?: string;
 }) => {
+  const iconName = avatarUrl ? undefined : avatarIcon ?? getRandomContactIcon();
+
   const contact: Contact = {
     id: generateId(),
     name,
     avatarColor,
+    avatarIcon: iconName,
     avatarUrl,
     prompt,
     worldBook: worldBook ?? '',
@@ -43,9 +49,20 @@ export const createContact = async ({
 
 export const updateContact = async (
   contactId: string,
-  updates: Partial<Pick<Contact, 'name' | 'avatarColor' | 'avatarUrl' | 'prompt' | 'worldBook'>>
+  updates: Partial<Pick<Contact, 'name' | 'avatarColor' | 'avatarIcon' | 'avatarUrl' | 'prompt' | 'worldBook'>>
 ) => {
-  await db.contacts.update(contactId, updates);
+  const nextUpdates = { ...updates };
+
+  if (typeof nextUpdates.avatarUrl === 'string') {
+    const trimmed = nextUpdates.avatarUrl.trim();
+    nextUpdates.avatarUrl = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof nextUpdates.avatarIcon === 'string' && nextUpdates.avatarIcon.length === 0) {
+    nextUpdates.avatarIcon = undefined;
+  }
+
+  await db.contacts.update(contactId, nextUpdates);
 
   if (updates.name) {
     await db.threads.where({ contactId }).modify((thread) => {

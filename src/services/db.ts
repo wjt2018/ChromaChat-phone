@@ -6,6 +6,7 @@ export interface Contact {
   id: string;
   name: string;
   avatarColor: string;
+  avatarIcon?: string;
   avatarUrl?: string;
   prompt: string;
   worldBook?: string;
