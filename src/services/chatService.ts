@@ -2,8 +2,112 @@ import { db, Message, MessageRole, Thread, Contact } from './db';
 import { chatCompletion, ChatMessage } from './llmClient';
 import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
 import { ContactIconName, getRandomContactIcon } from '../constants/icons';
+import { estimateTextTokens } from './tokenEstimator';
 
 const generateId = () => crypto.randomUUID();
+type SettingsSnapshot = ReturnType<typeof useSettingsStore.getState>;
+type PromptSettingsSnapshot = Pick<SettingsSnapshot, 'systemPrompt' | 'userName' | 'userPrompt' | 'model'>;
+
+export const DEFAULT_TOKEN_LIMIT = 4000;
+const MIN_TOKEN_LIMIT = 500;
+const MESSAGE_TOKEN_OVERHEAD = 4;
+const SYSTEM_TOKEN_OVERHEAD = 12;
+
+const sanitizeText = (value: string | undefined | null) => value?.trim() ?? '';
+
+const resolveTokenLimit = (tokenLimit?: number) => {
+  if (typeof tokenLimit !== 'number' || Number.isNaN(tokenLimit)) {
+    return DEFAULT_TOKEN_LIMIT;
+  }
+  return Math.max(MIN_TOKEN_LIMIT, Math.floor(tokenLimit));
+};
+
+const buildSystemPromptContent = (contact: Contact, settings: PromptSettingsSnapshot) => {
+  const baseSystemPrompt = sanitizeText(settings.systemPrompt) || defaultSystemPrompt;
+  const rolePrompt = sanitizeText(contact.prompt) || '未提供';
+  const worldBook = sanitizeText(contact.worldBook) || '未提供';
+  const effectiveUserName =
+    sanitizeText(contact.selfName) ||
+    sanitizeText(settings.userName) ||
+    '用户';
+  const effectiveUserPrompt =
+    sanitizeText(contact.selfPrompt) ||
+    sanitizeText(settings.userPrompt) ||
+    '未提供';
+
+  return `${baseSystemPrompt}
+---
+角色信息：
+名称：${contact.name}
+设定：${rolePrompt}
+世界观：${worldBook}
+
+用户信息：
+名称：${effectiveUserName}
+设定：${effectiveUserPrompt}`;
+};
+
+export type ChatPayload = {
+  payloadMessages: ChatMessage[];
+  tokenCount: number;
+  tokenLimit: number;
+};
+
+export const buildChatPayload = ({
+  contact,
+  settings,
+  history,
+  tokenLimit
+}: {
+  contact: Contact;
+  settings: PromptSettingsSnapshot;
+  history: Message[];
+  tokenLimit?: number;
+}): ChatPayload => {
+  const limit = resolveTokenLimit(tokenLimit ?? contact.tokenLimit);
+  const systemContent = buildSystemPromptContent(contact, settings);
+  const orderedHistory = [...history];
+
+  const systemTokens = estimateTextTokens(systemContent) + SYSTEM_TOKEN_OVERHEAD;
+  let totalTokens = systemTokens;
+  const selectedMessages: Message[] = [];
+
+  for (let index = orderedHistory.length - 1; index >= 0; index -= 1) {
+    const message = orderedHistory[index];
+    const contentTokens = estimateTextTokens(message.content) + MESSAGE_TOKEN_OVERHEAD;
+    const nextTotal = totalTokens + contentTokens;
+
+    if (nextTotal > limit) {
+      if (selectedMessages.length === 0) {
+        selectedMessages.push(message);
+        totalTokens = nextTotal;
+      }
+      break;
+    }
+
+    selectedMessages.push(message);
+    totalTokens = nextTotal;
+  }
+
+  selectedMessages.reverse();
+
+  const payloadMessages: ChatMessage[] = [
+    {
+      role: 'system',
+      content: systemContent
+    },
+    ...selectedMessages.map((message) => ({
+      role: message.role,
+      content: message.content
+    }))
+  ];
+
+  return {
+    payloadMessages,
+    tokenCount: totalTokens,
+    tokenLimit: limit
+  };
+};
 
 export const createContact = async ({
   name,
@@ -30,6 +134,7 @@ export const createContact = async ({
     avatarUrl,
     prompt,
     worldBook: worldBook ?? '',
+    tokenLimit: DEFAULT_TOKEN_LIMIT,
     createdAt: Date.now()
   };
 
@@ -63,6 +168,7 @@ export const updateContact = async (
       | 'selfAvatarIcon'
       | 'selfAvatarUrl'
       | 'selfPrompt'
+      | 'tokenLimit'
     >
   >
 ) => {
@@ -94,6 +200,10 @@ export const updateContact = async (
   if (typeof nextUpdates.selfPrompt === 'string') {
     const trimmed = nextUpdates.selfPrompt.trim();
     nextUpdates.selfPrompt = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if ('tokenLimit' in nextUpdates) {
+    nextUpdates.tokenLimit = resolveTokenLimit(nextUpdates.tokenLimit);
   }
 
   await db.contacts.update(contactId, nextUpdates);
@@ -132,48 +242,24 @@ export const sendMessageToLLM = async ({ threadId }: { threadId: string }) => {
   }
 
   const settings = useSettingsStore.getState();
-  const systemPrompt = settings.systemPrompt || defaultSystemPrompt;
-  const effectiveUserName =
-    contact.selfName && contact.selfName.trim().length > 0
-      ? contact.selfName.trim()
-      : settings.userName && settings.userName.trim().length > 0
-        ? settings.userName.trim()
-        : '�û�';
-  const effectiveUserPrompt =
-    contact.selfPrompt && contact.selfPrompt.trim().length > 0
-      ? contact.selfPrompt.trim()
-      : settings.userPrompt && settings.userPrompt.trim().length > 0
-        ? settings.userPrompt.trim()
-        : '��δ�ṩ��';
-
   const history = await db.messages.where({ threadId }).sortBy('createdAt');
-  const recentMessages = history.slice(-20);
-
-  const payloadMessages: ChatMessage[] = [
-    {
-      role: 'system',
-      content: `${systemPrompt}
----
-��ɫ��Ϣ��
-������${contact.name}
-���裺${contact.prompt || '��δ�ṩ��'}
-�����飺${contact.worldBook && contact.worldBook.trim().length > 0 ? contact.worldBook : '��δ�ṩ��'}
-
-�û���Ϣ��
-������${effectiveUserName}
-�����飺${effectiveUserPrompt}`
+  const payload = buildChatPayload({
+    contact,
+    settings: {
+      systemPrompt: settings.systemPrompt,
+      userName: settings.userName,
+      userPrompt: settings.userPrompt,
+      model: settings.model
     },
-    ...recentMessages.map((message) => ({
-      role: message.role,
-      content: message.content
-    }))
-  ];
+    history,
+    tokenLimit: contact.tokenLimit
+  });
 
   const { content } = await chatCompletion({
     baseUrl: settings.baseUrl,
     apiKey: settings.apiKey,
     model: settings.model,
-    messages: payloadMessages
+    messages: payload.payloadMessages
   });
 
   return content;

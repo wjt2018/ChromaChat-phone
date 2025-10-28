@@ -15,6 +15,7 @@ export interface Contact {
   selfAvatarIcon?: string;
   selfAvatarUrl?: string;
   selfPrompt?: string;
+  tokenLimit?: number;
   createdAt: number;
 }
 

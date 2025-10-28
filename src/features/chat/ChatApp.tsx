@@ -4,7 +4,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { db, Contact, Message } from '../../services/db';
 import {
+  buildChatPayload,
   createContact,
+  DEFAULT_TOKEN_LIMIT,
   deleteContact,
   persistMessage,
   sendMessageToLLM,
@@ -21,6 +23,8 @@ const randomColor = () => {
   const palette = ['#38bdf8', '#f472b6', '#34d399', '#f59e0b', '#a855f7', '#ef4444', '#fb7185'];
   return palette[Math.floor(Math.random() * palette.length)];
 };
+
+const MIN_TOKEN_LIMIT = 500;
 
 const ContactAvatar = ({
   contact,
@@ -293,6 +297,10 @@ const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenPr
 
 type ContactDetailsModalProps = {
   contact: Contact;
+  tokenStats?: {
+    currentTokens: number;
+    tokenLimit: number;
+  };
   onClose: () => void;
   onSave: (updates: {
     name: string;
@@ -306,11 +314,12 @@ type ContactDetailsModalProps = {
     selfAvatarIcon?: string;
     selfAvatarUrl?: string;
     selfPrompt?: string;
+    tokenLimit: number;
   }) => Promise<void>;
   onDelete: () => Promise<void>;
 };
 
-const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDetailsModalProps) => {
+const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }: ContactDetailsModalProps) => {
   const globalUserSettings = useSettingsStore((state) => ({
     userName: state.userName,
     userPrompt: state.userPrompt,
@@ -337,6 +346,9 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tokenLimitInput, setTokenLimitInput] = useState(
+    () => String(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT)
+  );
   const trimmedAvatarUrl = avatarUrl.trim();
   const resolvedAvatarIcon = trimmedAvatarUrl ? '' : (avatarIcon || contact.avatarIcon || '');
   const trimmedSelfAvatarUrl = selfAvatarUrl.trim();
@@ -353,6 +365,23 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
     setSelfAvatarColor(globalUserSettings.userAvatarColor || '#0ea5e9');
     setIsSelfAvatarColorCustom(false);
   };
+  useEffect(() => {
+    setTokenLimitInput(String(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT));
+  }, [contact.id, contact.tokenLimit]);
+  const resolvedTokenLimit = useMemo(() => {
+    const numericValue = parseInt(tokenLimitInput, 10);
+    if (Number.isNaN(numericValue)) {
+      return DEFAULT_TOKEN_LIMIT;
+    }
+    return Math.max(MIN_TOKEN_LIMIT, Math.floor(numericValue));
+  }, [tokenLimitInput]);
+  const currentTokenUsage = tokenStats?.currentTokens ?? 0;
+  const currentContextLimit = Math.max(
+    MIN_TOKEN_LIMIT,
+    tokenStats?.tokenLimit ?? contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT
+  );
+  const isOverContextLimit = currentTokenUsage > currentContextLimit;
+  const limitWillChange = resolvedTokenLimit !== currentContextLimit;
   const previewContact = {
     ...contact,
     name: name.trim() || contact.name,
@@ -382,7 +411,8 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
         selfPrompt: selfPrompt.trim(),
         selfAvatarUrl: trimmedSelfUrl,
         selfAvatarIcon: selfAvatarIcon || undefined,
-        selfAvatarColor: isSelfAvatarColorCustom ? selfAvatarColor : undefined
+        selfAvatarColor: isSelfAvatarColorCustom ? selfAvatarColor : undefined,
+        tokenLimit: resolvedTokenLimit
       });
       onClose();
     } catch (err) {
@@ -422,8 +452,11 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
             type="button"
             onClick={onClose}
             className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+            title='关闭'
           >
-            关闭
+            <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+              <use xlinkHref="#icon-close" />
+            </svg>
           </button>
         </header>
 
@@ -522,6 +555,27 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
             className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
             placeholder="记录角色的常用信息、事件和背景。"
           />
+        </label>
+
+        <label className="block text-sm text-white/70">
+          对话上下文 Token 上限
+          <input
+            type="number"
+            value={tokenLimitInput}
+            onChange={(event) => setTokenLimitInput(event.target.value)}
+            min={MIN_TOKEN_LIMIT}
+            step={100}
+            className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+            placeholder={`至少 ${MIN_TOKEN_LIMIT}`}
+          />
+          <p className={`mt-1 text-xs ${isOverContextLimit ? 'text-rose-200' : 'text-white/55'}`}>
+            当前上下文 token：{currentTokenUsage.toLocaleString()} / {currentContextLimit.toLocaleString()}
+          </p>
+          {limitWillChange ? (
+            <p className="mt-1 text-xs text-white/40">
+              保存后新的上限：{resolvedTokenLimit.toLocaleString()}
+            </p>
+          ) : null}
         </label>
 
         <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -934,6 +988,38 @@ const ChatApp = () => {
     return stack;
   }, [messages]);
 
+  const tokenStats = useMemo(() => {
+    if (!activeContact) {
+      return null;
+    }
+
+    const contextSettings = {
+      systemPrompt: settings.systemPrompt,
+      userName: settings.userName,
+      userPrompt: settings.userPrompt,
+      model: settings.model
+    };
+    const history = messages ?? [];
+
+    const { tokenCount, tokenLimit } = buildChatPayload({
+      contact: activeContact,
+      settings: contextSettings,
+      history
+    });
+
+    return {
+      currentTokens: tokenCount,
+      tokenLimit
+    };
+  }, [
+    activeContact,
+    messages,
+    settings.model,
+    settings.systemPrompt,
+    settings.userName,
+    settings.userPrompt
+  ]);
+
   const userProfile = useMemo<UserProfile>(() => {
     const globalName = settings.userName.trim().length > 0 ? settings.userName.trim() : '我';
     const globalAvatarUrl = settings.userAvatarUrl.trim();
@@ -1108,6 +1194,7 @@ const requestAssistantReply = async () => {
     selfAvatarIcon?: string;
     selfAvatarUrl?: string;
     selfPrompt?: string;
+    tokenLimit: number;
   }) => {
     if (!contactId) {
       return;
@@ -1154,11 +1241,11 @@ const requestAssistantReply = async () => {
               <button
                 onClick={handleBackToContacts}
                 className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20 sm:hidden"
+                title='返回联系人'
               >
                 <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
                   <use xlinkHref="#icon-left-arrow" />
                 </svg>
-                <span>返回联系人</span>
               </button>
               {activeContact ? (
                 <h1 className="text-base font-semibold text-white">
@@ -1176,17 +1263,8 @@ const requestAssistantReply = async () => {
                   aria-label="角色详情"
                   className="rounded-full border border-white/20 bg-white/10 p-2 text-white/80 transition hover:border-white/40 hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-4 w-4"
-                  >
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3 15.4 1.65 1.65 0 0 0 1.5 14H1a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 2.6 8 1.65 1.65 0 0 0 2.27 6.18l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 7 3.6 1.65 1.65 0 0 0 8.5 2H9a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 2.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 21 8.6a1.65 1.65 0 0 0 1.51 1H22a2 2 0 1 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z" />
+                  <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                    <use xlinkHref="#icon-settings" />
                   </svg>
                 </button>
               </div>
@@ -1233,40 +1311,47 @@ const requestAssistantReply = async () => {
                 {error}
               </div>
             ) : null}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
+            <div className="flex flex-wrap items-end gap-3 sm:flex-nowrap">
               <textarea
                 value={inputValue}
                 onChange={(event) => setInputValue(event.target.value)}
                 rows={1}
                 placeholder={activeContact ? '输入消息，可多条发送后一起请求回复…' : '请先在左侧选择一个角色'}
-                className="h-20 flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60 sm:h-12"
+                className="min-w-[240px] flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60 sm:h-12"
                 disabled={!activeThread || isSending}
               />
               <div className="flex flex-wrap gap-2 sm:flex-nowrap">
                 <button
+                  title="发送消息但不请求回复"
                   type="button"
                   onClick={() => handleSendMessage({ requestReply: false })}
                   disabled={isSending || trimmedInputValue.length === 0 || !activeThread}
                   className="rounded-3xl border border-white/20 px-4 py-2 text-sm text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{padding: '11px'}}
                 >
-                  仅发送
+                  <svg aria-hidden="true" className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
+                      <use xlinkHref="#icon-up-arrow" />
+                    </svg>
+                  <span className="sr-only">仅发送</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleSendMessage({ requestReply: true })}
                   disabled={isSending || !activeThread || (trimmedInputValue.length === 0 && !hasPendingUserMessages)}
                   className="flex items-center gap-2 rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="请求回复"
+                  style={{padding: '11px'}}
                 >
                   {isSending ? (
                     <svg
-                      className="h-4 w-4 animate-spin"
+                      className="h-4 w-4 animate-spin text-white"
                       viewBox="0 0 24 24"
                       fill="none"
                       aria-hidden="true"
                     >
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path
-                        className="opacity-75"
+                        className="opacity-90"
                         d="M4 12a8 8 0 0 1 8-8"
                         stroke="currentColor"
                         strokeWidth="4"
@@ -1274,11 +1359,11 @@ const requestAssistantReply = async () => {
                       />
                     </svg>
                   ) : (
-                    <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                    <svg aria-hidden="true" className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
                       <use xlinkHref="#icon-send-fill" />
                     </svg>
                   )}
-                  <span>{isSending ? '等待AI…' : '向AI请求回复'}</span>
+                  <span className="sr-only">发送并请求回复</span>
                 </button>
               </div>
             </div>
@@ -1296,6 +1381,7 @@ const requestAssistantReply = async () => {
       {isDetailsOpen && activeContact ? (
         <ContactDetailsModal
           contact={activeContact}
+          tokenStats={tokenStats ?? undefined}
           onClose={() => setIsDetailsOpen(false)}
           onSave={handleSaveContactDetails}
           onDelete={async () => handleDeleteContact(activeContact.id)}

@@ -188,11 +188,11 @@ const SettingsApp = () => {
           to="/"
           aria-label="返回"
           className="inline-flex w-max items-center gap-2 rounded-2xl border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold text-white/80 shadow-glass transition hover:border-white/60 hover:bg-white/20"
+          title='返回'
         >
           <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
             <use xlinkHref="#icon-left-arrow" />
           </svg>
-          <span>返回</span>
         </Link>
         <div>
           <h1 className="text-2xl font-semibold text-white">设置</h1>
