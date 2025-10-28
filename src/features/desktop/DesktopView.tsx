@@ -47,13 +47,6 @@ const DesktopView = () => {
           ))}
         </div>
 
-        <div className="rounded-3xl border border-white/10 bg-white/10 p-4 text-center text-white/70 shadow-glass backdrop-blur-2xl">
-          <p className="text-sm">
-            欢迎来到 <strong>ChromaChat</strong>。
-            <br />
-            打开「微信」添加联系人，与 AI 角色进行沉浸式角色扮演对话。
-          </p>
-        </div>
       </section>
     </div>
   );

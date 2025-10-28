@@ -1,4 +1,4 @@
-import { FormEvent, SVGProps, useEffect, useMemo, useState } from 'react';
+import { FormEvent, SVGProps, useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -68,6 +68,109 @@ const ContactAvatar = ({
   );
 };
 
+const UserAvatar = ({
+  profile,
+  size = 'h-10 w-10',
+  className = ''
+}: {
+  profile: UserProfile;
+  size?: string;
+  className?: string;
+}) => {
+  const [failed, setFailed] = useState(false);
+  const avatarUrl = profile.avatarUrl?.trim();
+  const avatarIcon = avatarUrl ? undefined : profile.avatarIcon;
+  const initial = profile.name.trim().slice(0, 1) || '我';
+  const backgroundColor = profile.avatarColor || '#0ea5e9';
+
+  useEffect(() => {
+    setFailed(false);
+  }, [avatarUrl]);
+
+  if (avatarUrl && !failed) {
+    return (
+      <div className={`min-w-[36px] overflow-hidden rounded-2xl ${size} ${className}`}>
+        <img
+          src={avatarUrl}
+          alt={`${profile.name} avatar`}
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`flex min-w-[36px] items-center justify-center rounded-2xl text-sm font-semibold text-white shadow-inner shadow-black/20 ${size} ${className}`}
+      style={{ backgroundColor }}
+    >
+      {avatarIcon ? (
+        <svg aria-hidden="true" className="h-5 w-5">
+          <use xlinkHref={`#${avatarIcon}`} />
+        </svg>
+      ) : (
+        initial
+      )}
+    </div>
+  );
+};
+
+const AssistantAvatar = ({
+  contact,
+  size = 'h-10 w-10',
+  className = ''
+}: {
+  contact?: Contact;
+  size?: string;
+  className?: string;
+}) => {
+  if (contact) {
+    return (
+      <ContactAvatar
+        contact={contact}
+        size={size}
+        className={`min-w-[36px] ${className}`.trim()}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`flex min-w-[36px] items-center justify-center rounded-2xl bg-white/20 text-sm font-semibold uppercase text-white/80 shadow-inner shadow-white/10 ${size} ${className}`}
+    >
+      AI
+    </div>
+  );
+};
+
+const splitAssistantResponse = (content: string): string[] => {
+  const normalized = content.replace(/\r\n/g, '\n').trim();
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const sentenceRegex = /[^。！？!?；;]+[。！？!?；;]?/g;
+  const sentences: string[] = [];
+  const paragraphs = normalized.split(/\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
+
+  paragraphs.forEach((paragraph) => {
+    const matches = paragraph.match(sentenceRegex);
+    if (matches) {
+      matches.forEach((match) => {
+        const trimmed = match.trim();
+        if (trimmed.length > 0) {
+          sentences.push(trimmed);
+        }
+      });
+    } else if (paragraph.length > 0) {
+      sentences.push(paragraph);
+    }
+  });
+
+  return sentences;
+};
+
 const SettingsIcon = ({ className = 'h-5 w-5', ...props }: SVGProps<SVGSVGElement>) => (
   <svg
     viewBox="0 0 24 24"
@@ -89,6 +192,13 @@ type ContactSidebarProps = {
   activeContactId?: string;
   onSelect: (id: string) => void;
   onCreate: () => void;
+};
+
+type UserProfile = {
+  name: string;
+  avatarColor: string;
+  avatarIcon?: string;
+  avatarUrl?: string;
 };
 
 const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: ContactSidebarProps) => (
@@ -141,7 +251,10 @@ const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenPr
         aria-label="返回主屏"
         className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-white/10 text-lg font-semibold text-white transition hover:border-white/40 hover:bg-white/20"
       >
-        ←
+        <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+          <use xlinkHref="#icon-left-arrow" />
+        </svg>
+        <span className="sr-only">返回主屏</span>
       </Link>
       <button
         onClick={onCreate}
@@ -152,9 +265,6 @@ const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenPr
     </header>
 
     <section className="flex-1 space-y-3 overflow-y-auto px-4 py-6 sm:px-6">
-      <div className="rounded-3xl border border-white/10 bg-white/10 p-4 text-sm text-white/70 shadow-glass backdrop-blur-xl">
-        选择联系人开始聊天，或新建角色打造专属 AI 形象。
-      </div>
       {contacts.length === 0 ? (
         <div className="rounded-3xl border border-white/10 bg-white/10 p-6 text-center text-sm text-white/70 shadow-glass backdrop-blur-xl">
           还没有联系人，点击右上角的「+ 新建角色」创建一个吧。
@@ -165,6 +275,7 @@ const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenPr
             key={contact.id}
             onClick={() => onSelect(contact.id)}
             className="flex items-center gap-4 rounded-3xl border border-white/10 bg-white/10 px-4 py-4 text-left shadow-glass backdrop-blur-xl transition hover:border-white/40 hover:bg-white/20"
+            style={{width: '100%'}}          
           >
             <ContactAvatar contact={contact} size="h-12 w-12" iconScale="h-3/4 w-3/4" />
             <div className="flex flex-1 flex-col">
@@ -190,11 +301,23 @@ type ContactDetailsModalProps = {
     avatarIcon?: string;
     avatarUrl: string;
     worldBook: string;
+    selfName?: string;
+    selfAvatarColor?: string;
+    selfAvatarIcon?: string;
+    selfAvatarUrl?: string;
+    selfPrompt?: string;
   }) => Promise<void>;
   onDelete: () => Promise<void>;
 };
 
 const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDetailsModalProps) => {
+  const globalUserSettings = useSettingsStore((state) => ({
+    userName: state.userName,
+    userPrompt: state.userPrompt,
+    userAvatarColor: state.userAvatarColor,
+    userAvatarIcon: state.userAvatarIcon,
+    userAvatarUrl: state.userAvatarUrl
+  }));
   const [name, setName] = useState(contact.name);
   const [prompt, setPrompt] = useState(contact.prompt);
   const [avatarColor, setAvatarColor] = useState(contact.avatarColor);
@@ -202,11 +325,34 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
   const [avatarUrl, setAvatarUrl] = useState(contact.avatarUrl ?? '');
   const [avatarIcon, setAvatarIcon] = useState<ContactIconName | ''>(contact.avatarIcon ?? '');
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
+  const [selfName, setSelfName] = useState(contact.selfName ?? '');
+  const [selfPrompt, setSelfPrompt] = useState(contact.selfPrompt ?? '');
+  const [selfAvatarUrl, setSelfAvatarUrl] = useState(contact.selfAvatarUrl ?? '');
+  const [selfAvatarIcon, setSelfAvatarIcon] = useState<ContactIconName | ''>(contact.selfAvatarIcon ?? '');
+  const [selfAvatarColor, setSelfAvatarColor] = useState(
+    (contact.selfAvatarColor ?? globalUserSettings.userAvatarColor) || '#0ea5e9'
+  );
+  const [isSelfAvatarColorCustom, setIsSelfAvatarColorCustom] = useState(Boolean(contact.selfAvatarColor));
+  const [isSelfIconPickerOpen, setIsSelfIconPickerOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const trimmedAvatarUrl = avatarUrl.trim();
   const resolvedAvatarIcon = trimmedAvatarUrl ? '' : (avatarIcon || contact.avatarIcon || '');
+  const trimmedSelfAvatarUrl = selfAvatarUrl.trim();
+  const resolvedSelfAvatarIcon = trimmedSelfAvatarUrl ? '' : (selfAvatarIcon || '');
+  const globalUserAvatarUrl = globalUserSettings.userAvatarUrl?.trim() ?? '';
+  const effectiveSelfAvatarColor = isSelfAvatarColorCustom
+    ? selfAvatarColor
+    : globalUserSettings.userAvatarColor || '#0ea5e9';
+  const handleResetSelfSettings = () => {
+    setSelfName('');
+    setSelfPrompt('');
+    setSelfAvatarUrl('');
+    setSelfAvatarIcon('');
+    setSelfAvatarColor(globalUserSettings.userAvatarColor || '#0ea5e9');
+    setIsSelfAvatarColorCustom(false);
+  };
   const previewContact = {
     ...contact,
     name: name.trim() || contact.name,
@@ -224,13 +370,19 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
     try {
       const trimmedUrl = avatarUrl.trim();
       const nextIcon = (avatarIcon || contact.avatarIcon) ?? undefined;
+      const trimmedSelfUrl = selfAvatarUrl.trim();
       await onSave({
         name: name.trim() || contact.name,
         prompt: prompt.trim(),
         avatarColor,
         avatarIcon: nextIcon,
         avatarUrl: trimmedUrl,
-        worldBook: worldBook.trim()
+        worldBook: worldBook.trim(),
+        selfName: selfName.trim(),
+        selfPrompt: selfPrompt.trim(),
+        selfAvatarUrl: trimmedSelfUrl,
+        selfAvatarIcon: selfAvatarIcon || undefined,
+        selfAvatarColor: isSelfAvatarColorCustom ? selfAvatarColor : undefined
       });
       onClose();
     } catch (err) {
@@ -241,7 +393,7 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
   };
 
   const handleDelete = async () => {
-    const confirmed = window.confirm(`确定要删除联系人「${contact.name}」吗？此操作不可撤销。`);
+    const confirmed = window.confirm(`确定要删除联系人“${contact.name}”吗？此操作不可恢复`);
     if (!confirmed) {
       return;
     }
@@ -276,7 +428,7 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
         </header>
 
         <label className="block text-sm text-white/70">
-          角色姓名
+          角色名称
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -292,12 +444,12 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
             onChange={(event) => setPrompt(event.target.value)}
             rows={4}
             className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
-            placeholder="描述角色的性格、语气与背景。"
+            placeholder="描述角色的性格和背景"
           />
         </label>
 
         <label className="block text-sm text-white/70">
-          当前头像
+          角色头像
           <div className="mt-2 flex items-center gap-3">
             <button
               type="button"
@@ -307,7 +459,7 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
               <ContactAvatar contact={previewContact} size="h-14 w-14" iconScale="h-3/4 w-3/4" />
             </button>
             <div className="text-xs text-white/55">
-              点击头像从猫咪图标库中选择；填写下方图片链接时，将自动使用该图片。
+              选择图标或填写图片链接，图片优先显示。
             </div>
           </div>
           {isIconPickerOpen && (
@@ -339,7 +491,7 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
         </label>
 
         <label className="block text-sm text-white/70">
-          头像图片链接
+          角色头像图片
           <input
             value={avatarUrl}
             onChange={(event) => setAvatarUrl(event.target.value)}
@@ -347,7 +499,7 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
             className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
           />
           <span className="mt-1 block text-xs text-white/50">
-            支持使用网络图片作为头像，留空将使用图标与背景色的组合。
+            如果填写图片地址，会优先使用图片作为头像。
           </span>
         </label>
 
@@ -362,15 +514,126 @@ const ContactDetailsModal = ({ contact, onClose, onSave, onDelete }: ContactDeta
         </label>
 
         <label className="block text-sm text-white/70">
-          角色世界书
+          角色设定文档
           <textarea
             value={worldBook}
             onChange={(event) => setWorldBook(event.target.value)}
             rows={6}
             className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
-            placeholder="补充角色所在世界观、事件、关键设定等信息。"
+            placeholder="记录角色的常用信息、事件和背景。"
           />
         </label>
+
+        <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-white">我的信息（仅当前对话）</h3>
+            <button
+              type="button"
+              onClick={handleResetSelfSettings}
+              className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+            >
+              使用全局
+            </button>
+          </div>
+          <p className="text-xs text-white/55">留空将使用“设置”页面中的全局个人信息。</p>
+
+          <label className="block text-xs text-white/70 sm:text-sm">
+            我的姓名
+            <input
+              value={selfName}
+              onChange={(event) => setSelfName(event.target.value)}
+              placeholder={globalUserSettings.userName ? `全局：${globalUserSettings.userName}` : '例如：小李'}
+              className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+            />
+          </label>
+
+          <label className="block text-xs text-white/70 sm:text-sm">
+            我的设定
+            <textarea
+              value={selfPrompt}
+              onChange={(event) => setSelfPrompt(event.target.value)}
+              rows={3}
+              placeholder={globalUserSettings.userPrompt ? `全局：${globalUserSettings.userPrompt.slice(0, 40)}...` : '可描述你的说话风格或身份'}
+              className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+            />
+          </label>
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-white/70 sm:text-sm">自定义头像</span>
+              <button
+                type="button"
+                onClick={() => setIsSelfIconPickerOpen((prev) => !prev)}
+                className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+              >
+                选择图标
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelfAvatarIcon('');
+                  setSelfAvatarUrl('');
+                }}
+                className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+              >
+                清除图标
+              </button>
+            </div>
+            {isSelfIconPickerOpen && (
+              <div className="max-h-48 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-3">
+                <div className="grid grid-cols-5 gap-3 sm:grid-cols-6">
+                  {CONTACT_ICON_OPTIONS.map((icon) => (
+                    <button
+                      type="button"
+                      key={icon}
+                      onClick={() => {
+                        setSelfAvatarIcon(icon);
+                        setSelfAvatarUrl('');
+                        setIsSelfIconPickerOpen(false);
+                      }}
+                      className={`flex h-12 w-12 items-center justify-center rounded-2xl border transition ${
+                        resolvedSelfAvatarIcon === icon && !trimmedSelfAvatarUrl
+                          ? 'border-cyan-300 bg-cyan-300/20 text-cyan-200'
+                          : 'border-white/15 bg-white/10 text-white/80 hover:border-white/40 hover:bg-white/20'
+                      }`}
+                    >
+                      <svg aria-hidden="true" className="h-7 w-7">
+                        <use xlinkHref={`#${icon}`} />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <input
+              value={selfAvatarUrl}
+              onChange={(event) => setSelfAvatarUrl(event.target.value)}
+              placeholder={globalUserAvatarUrl ? `全局图片：${globalUserAvatarUrl}` : '留空以使用全局头像'}
+              className="w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+            />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="color"
+                value={effectiveSelfAvatarColor}
+                onChange={(event) => {
+                  setSelfAvatarColor(event.target.value);
+                  setIsSelfAvatarColorCustom(true);
+                }}
+                className="h-10 w-full cursor-pointer rounded-2xl border border-white/10 bg-transparent sm:w-40"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setSelfAvatarColor(globalUserSettings.userAvatarColor || '#0ea5e9');
+                  setIsSelfAvatarColorCustom(false);
+                }}
+                className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+              >
+                使用全局颜色
+              </button>
+            </div>
+          </div>
+        </section>
 
         {error ? <p className="rounded-2xl bg-red-500/20 px-4 py-2 text-xs text-red-200">{error}</p> : null}
 
@@ -540,18 +803,49 @@ const NewContactForm = ({
   );
 };
 
-const MessageBubble = ({ message }: { message: Message }) => {
+const MessageBubble = ({
+  message,
+  contact,
+  userProfile
+}: {
+  message: Message;
+  contact?: Contact;
+  userProfile: UserProfile;
+}) => {
   const isSelf = message.role === 'user';
+
+  const bubble = (
+    <div
+      className={`max-w-xs rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-lg sm:max-w-sm ${
+        isSelf
+          ? 'bg-cyan-400/85 text-slate-900 shadow-cyan-500/40 backdrop-blur-md'
+          : 'bg-white/15 text-white shadow-white/10 backdrop-blur-md'
+      }`}
+    >
+      {message.content}
+    </div>
+  );
+
+  const avatar = isSelf ? (
+    <UserAvatar profile={userProfile} size="h-9 w-9 sm:h-10 sm:w-10" />
+  ) : (
+    <AssistantAvatar contact={contact} size="h-9 w-9 sm:h-10 sm:w-10" />
+  );
+
   return (
     <div className={`flex ${isSelf ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-xs rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-lg sm:max-w-sm ${
-          isSelf
-            ? 'bg-cyan-400/85 text-slate-900 shadow-cyan-500/40 backdrop-blur-md'
-            : 'bg-white/15 text-white shadow-white/10 backdrop-blur-md'
-        }`}
-      >
-        {message.content}
+      <div className="flex items-end gap-2 sm:gap-3">
+        {isSelf ? (
+          <>
+            {bubble}
+            {avatar}
+          </>
+        ) : (
+          <>
+            {avatar}
+            {bubble}
+          </>
+        )}
       </div>
     </div>
   );
@@ -567,6 +861,7 @@ const ChatApp = () => {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   const settings = useSettingsStore();
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!settings.isLoaded) {
@@ -606,6 +901,89 @@ const ChatApp = () => {
 
   const activeContact = contacts?.find((contact) => contact.id === contactId);
 
+  useEffect(() => {
+    if (!messages || messages.length === 0) {
+      return;
+    }
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: 'smooth'
+    });
+  }, [activeThread?.id, messages?.length]);
+
+  const pendingUserMessages = useMemo(() => {
+    if (!messages || messages.length === 0) {
+      return [];
+    }
+
+    const stack: string[] = [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === 'assistant') {
+        break;
+      }
+      if (message.role === 'user') {
+        stack.unshift(message.content);
+      }
+    }
+
+    return stack;
+  }, [messages]);
+
+  const userProfile = useMemo<UserProfile>(() => {
+    const globalName = settings.userName.trim().length > 0 ? settings.userName.trim() : '我';
+    const globalAvatarUrl = settings.userAvatarUrl.trim();
+    const globalAvatarIcon = globalAvatarUrl ? '' : settings.userAvatarIcon || '';
+    const globalAvatarColor = settings.userAvatarColor || '#0ea5e9';
+
+    if (!activeContact) {
+      return {
+        name: globalName,
+        avatarColor: globalAvatarColor,
+        avatarIcon: globalAvatarIcon || undefined,
+        avatarUrl: globalAvatarUrl || undefined
+      };
+    }
+
+    const localName = activeContact.selfName?.trim();
+    const localAvatarUrl = activeContact.selfAvatarUrl?.trim() ?? '';
+    const localAvatarIcon = localAvatarUrl ? '' : activeContact.selfAvatarIcon || '';
+    const localAvatarColor = activeContact.selfAvatarColor;
+
+    const effectiveName = localName && localName.length > 0 ? localName : globalName;
+    const effectiveAvatarUrl = localAvatarUrl || globalAvatarUrl;
+    let effectiveAvatarIcon: string | undefined;
+
+    if (localAvatarUrl) {
+      effectiveAvatarIcon = undefined;
+    } else if (localAvatarIcon) {
+      effectiveAvatarIcon = localAvatarIcon;
+    } else if (globalAvatarUrl) {
+      effectiveAvatarIcon = undefined;
+    } else if (globalAvatarIcon) {
+      effectiveAvatarIcon = globalAvatarIcon;
+    }
+
+    return {
+      name: effectiveName,
+      avatarColor: localAvatarColor ?? globalAvatarColor,
+      avatarIcon: effectiveAvatarIcon || undefined,
+      avatarUrl: effectiveAvatarUrl || undefined
+    };
+  }, [
+    activeContact,
+    settings.userAvatarColor,
+    settings.userAvatarIcon,
+    settings.userAvatarUrl,
+    settings.userName
+  ]);
+  const hasPendingUserMessages = pendingUserMessages.length > 0;
+  const trimmedInputValue = inputValue.trim();
+
   const handleSelectContact = (id: string) => {
     navigate(`/apps/chat/${id}`);
   };
@@ -614,39 +992,97 @@ const ChatApp = () => {
     navigate('/apps/chat');
   };
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || !activeThread || !contactId) {
+  
+const requestAssistantReply = async () => {
+    if (!activeThread || !contactId) {
       return;
     }
-    if (!settings.apiKey) {
-      setError('请先在「设置」中填写 API Key。');
-      return;
-    }
-    setIsSending(true);
-    const userMessage = inputValue.trim();
-    setInputValue('');
-    setError(null);
-    try {
-      await persistMessage({
-        threadId: activeThread.id,
-        role: 'user',
-        content: userMessage
-      });
 
-      const response = await sendMessageToLLM({ threadId: activeThread.id, userMessage });
-      await persistMessage({
-        threadId: activeThread.id,
-        role: 'assistant',
-        content: response
-      });
+    const threadMessages = await db.messages.where({ threadId: activeThread.id }).sortBy('createdAt');
+    let hasPendingUserMessage = false;
+    for (let index = threadMessages.length - 1; index >= 0; index -= 1) {
+      const message = threadMessages[index];
+      if (message.role === 'assistant') {
+        break;
+      }
+      if (message.role === 'user') {
+        hasPendingUserMessage = true;
+        break;
+      }
+    }
+
+    if (!hasPendingUserMessage) {
+      setError('暂无新的用户消息待 AI 回复。');
+      return;
+    }
+
+    if (!settings.apiKey) {
+      setError('请先在“设置”页面填写 API Key。');
+      return;
+    }
+
+    setIsSending(true);
+    setError(null);
+
+    try {
+      const response = await sendMessageToLLM({ threadId: activeThread.id });
+      const segments = splitAssistantResponse(response);
+      const parts = segments.length > 0 ? segments : [response.trim()];
+
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (trimmed.length === 0) {
+          continue;
+        }
+        await persistMessage({
+          threadId: activeThread.id,
+          role: 'assistant',
+          content: trimmed
+        });
+      }
     } catch (err) {
       const message =
         err instanceof Error
           ? err.message
-          : '发送失败，请稍后重试或检查网络连接。';
+          : '请求失败，请稍后再试或检查设置。';
       setError(message);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleSendMessage = async ({ requestReply }: { requestReply: boolean }) => {
+    if (!activeThread || !contactId) {
+      return;
+    }
+
+    const trimmedInput = inputValue.trim();
+
+    if (!requestReply && trimmedInput.length === 0) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      if (trimmedInput.length > 0) {
+        await persistMessage({
+          threadId: activeThread.id,
+          role: 'user',
+          content: trimmedInput
+        });
+        setInputValue('');
+      }
+
+      if (requestReply) {
+        await requestAssistantReply();
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : '发送失败，请稍后再试或检查设置。';
+      setError(message);
     }
   };
 
@@ -667,6 +1103,11 @@ const ChatApp = () => {
     avatarIcon?: string;
     avatarUrl: string;
     worldBook: string;
+    selfName?: string;
+    selfAvatarColor?: string;
+    selfAvatarIcon?: string;
+    selfAvatarUrl?: string;
+    selfPrompt?: string;
   }) => {
     if (!contactId) {
       return;
@@ -712,9 +1153,12 @@ const ChatApp = () => {
             <div className="flex flex-1 items-center gap-3" style={{justifyContent: 'space-between'}}>
               <button
                 onClick={handleBackToContacts}
-                className="inline-flex items-center rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20 sm:hidden"
+                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20 sm:hidden"
               >
-                ← 联系人
+                <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                  <use xlinkHref="#icon-left-arrow" />
+                </svg>
+                <span>返回联系人</span>
               </button>
               {activeContact ? (
                 <h1 className="text-base font-semibold text-white">
@@ -750,9 +1194,12 @@ const ChatApp = () => {
             <div className="hidden items-center gap-2 sm:flex">
               <Link
                 to="/"
-                className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
+                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
               >
-                主屏
+                <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                  <use xlinkHref="#icon-left-arrow" />
+                </svg>
+                <span>返回</span>
               </Link>
               <div className="rounded-full bg-white/20 px-4 py-1 text-xs text-white/80 shadow-inner">
                 {settings.model || '未选择模型'}
@@ -760,10 +1207,18 @@ const ChatApp = () => {
             </div>
           </header>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8">
+          <div
+            ref={messagesContainerRef}
+            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8"
+          >
             {messages && messages.length > 0 ? (
               messages.map((message) => (
-                <MessageBubble key={message.id ?? message.createdAt} message={message} />
+                <MessageBubble
+                  key={message.id ?? message.createdAt}
+                  message={message}
+                  contact={activeContact}
+                  userProfile={userProfile}
+                />
               ))
             ) : (
               <div className="mt-24 text-center text-white/60">
@@ -778,36 +1233,54 @@ const ChatApp = () => {
                 {error}
               </div>
             ) : null}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-4">
               <textarea
                 value={inputValue}
                 onChange={(event) => setInputValue(event.target.value)}
                 rows={1}
-                placeholder={activeContact ? '输入消息...' : '请先创建或选择一个角色'}
-                className="h-12 flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60"
-                disabled={!activeThread}
+                placeholder={activeContact ? '输入消息，可多条发送后一起请求回复…' : '请先在左侧选择一个角色'}
+                className="h-20 flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60 sm:h-12"
+                disabled={!activeThread || isSending}
               />
-              <button
-                onClick={handleSend}
-                disabled={isSending || !inputValue.trim() || !activeThread}
-                className="flex items-center gap-2 rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSending ? '发送中...' : '发送'}
-                {!isSending ? (
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="h-4 w-4"
-                  >
-                    <path d="m22 2-7 20-4-9-9-4Z" />
-                    <path d="M22 2 11 13" />
-                  </svg>
-                ) : null}
-              </button>
+              <div className="flex flex-wrap gap-2 sm:flex-nowrap">
+                <button
+                  type="button"
+                  onClick={() => handleSendMessage({ requestReply: false })}
+                  disabled={isSending || trimmedInputValue.length === 0 || !activeThread}
+                  className="rounded-3xl border border-white/20 px-4 py-2 text-sm text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  仅发送
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSendMessage({ requestReply: true })}
+                  disabled={isSending || !activeThread || (trimmedInputValue.length === 0 && !hasPendingUserMessages)}
+                  className="flex items-center gap-2 rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSending ? (
+                    <svg
+                      className="h-4 w-4 animate-spin"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path
+                        className="opacity-75"
+                        d="M4 12a8 8 0 0 1 8-8"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  ) : (
+                    <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                      <use xlinkHref="#icon-send-fill" />
+                    </svg>
+                  )}
+                  <span>{isSending ? '等待AI…' : '向AI请求回复'}</span>
+                </button>
+              </div>
             </div>
           </footer>
         </section>

@@ -11,6 +11,11 @@ interface SettingsState {
   apiKey: string;
   model: string;
   systemPrompt: string;
+  userName: string;
+  userAvatarColor: string;
+  userAvatarIcon: string;
+  userAvatarUrl: string;
+  userPrompt: string;
   isLoaded: boolean;
   load: () => Promise<void>;
   updateSettings: (changes: Partial<Omit<SettingsState, 'isLoaded' | 'load' | 'updateSettings'>>) => Promise<void>;
@@ -22,19 +27,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiKey: '',
   model: 'gpt-4o-mini',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  userName: '我',
+  userAvatarColor: '#0ea5e9',
+  userAvatarIcon: '',
+  userAvatarUrl: '',
+  userPrompt: '',
   isLoaded: false,
   load: async () => {
-    const [baseUrl, apiKey, model, systemPrompt] = await Promise.all([
+    const [baseUrl, apiKey, model, systemPrompt, userName, userAvatarColor, userAvatarIcon, userAvatarUrl, userPrompt] = await Promise.all([
       getSetting(settingsKeys.baseUrl, ''),
       getSetting(settingsKeys.apiKey, ''),
       getSetting(settingsKeys.model, 'gpt-4o-mini'),
-      getSetting(settingsKeys.systemPrompt, DEFAULT_SYSTEM_PROMPT)
+      getSetting(settingsKeys.systemPrompt, DEFAULT_SYSTEM_PROMPT),
+      getSetting(settingsKeys.userName, '我'),
+      getSetting(settingsKeys.userAvatarColor, '#0ea5e9'),
+      getSetting(settingsKeys.userAvatarIcon, ''),
+      getSetting(settingsKeys.userAvatarUrl, ''),
+      getSetting(settingsKeys.userPrompt, '')
     ]);
     set({
       baseUrl,
       apiKey,
       model,
       systemPrompt,
+      userName,
+      userAvatarColor,
+      userAvatarIcon,
+      userAvatarUrl,
+      userPrompt,
       isLoaded: true
     });
   },
@@ -54,7 +74,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       baseUrl: '',
       apiKey: '',
       model: 'gpt-4o-mini',
-      systemPrompt: DEFAULT_SYSTEM_PROMPT
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      userName: '我',
+      userAvatarColor: '#0ea5e9',
+      userAvatarIcon: '',
+      userAvatarUrl: '',
+      userPrompt: ''
     };
 
     await Promise.all(

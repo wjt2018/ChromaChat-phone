@@ -10,6 +10,11 @@ export interface Contact {
   avatarUrl?: string;
   prompt: string;
   worldBook?: string;
+  selfName?: string;
+  selfAvatarColor?: string;
+  selfAvatarIcon?: string;
+  selfAvatarUrl?: string;
+  selfPrompt?: string;
   createdAt: number;
 }
 
@@ -56,7 +61,12 @@ export const settingsKeys = {
   baseUrl: 'baseUrl',
   apiKey: 'apiKey',
   model: 'model',
-  systemPrompt: 'systemPrompt'
+  systemPrompt: 'systemPrompt',
+  userName: 'userName',
+  userAvatarColor: 'userAvatarColor',
+  userAvatarIcon: 'userAvatarIcon',
+  userAvatarUrl: 'userAvatarUrl',
+  userPrompt: 'userPrompt'
 } as const;
 
 export type SettingsKeys = keyof typeof settingsKeys;

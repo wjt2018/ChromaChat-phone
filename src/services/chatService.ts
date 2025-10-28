@@ -49,7 +49,22 @@ export const createContact = async ({
 
 export const updateContact = async (
   contactId: string,
-  updates: Partial<Pick<Contact, 'name' | 'avatarColor' | 'avatarIcon' | 'avatarUrl' | 'prompt' | 'worldBook'>>
+  updates: Partial<
+    Pick<
+      Contact,
+      | 'name'
+      | 'avatarColor'
+      | 'avatarIcon'
+      | 'avatarUrl'
+      | 'prompt'
+      | 'worldBook'
+      | 'selfName'
+      | 'selfAvatarColor'
+      | 'selfAvatarIcon'
+      | 'selfAvatarUrl'
+      | 'selfPrompt'
+    >
+  >
 ) => {
   const nextUpdates = { ...updates };
 
@@ -60,6 +75,25 @@ export const updateContact = async (
 
   if (typeof nextUpdates.avatarIcon === 'string' && nextUpdates.avatarIcon.length === 0) {
     nextUpdates.avatarIcon = undefined;
+  }
+
+  if (typeof nextUpdates.selfAvatarUrl === 'string') {
+    const trimmed = nextUpdates.selfAvatarUrl.trim();
+    nextUpdates.selfAvatarUrl = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof nextUpdates.selfAvatarIcon === 'string' && nextUpdates.selfAvatarIcon.length === 0) {
+    nextUpdates.selfAvatarIcon = undefined;
+  }
+
+  if (typeof nextUpdates.selfName === 'string') {
+    const trimmed = nextUpdates.selfName.trim();
+    nextUpdates.selfName = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof nextUpdates.selfPrompt === 'string') {
+    const trimmed = nextUpdates.selfPrompt.trim();
+    nextUpdates.selfPrompt = trimmed.length > 0 ? trimmed : undefined;
   }
 
   await db.contacts.update(contactId, nextUpdates);
@@ -86,13 +120,7 @@ export const saveMessage = async (message: Message) => {
   await db.threads.update(message.threadId, { updatedAt: message.createdAt });
 };
 
-export const sendMessageToLLM = async ({
-  threadId,
-  userMessage
-}: {
-  threadId: string;
-  userMessage: string;
-}) => {
+export const sendMessageToLLM = async ({ threadId }: { threadId: string }) => {
   const thread = await db.threads.get(threadId);
   if (!thread) {
     throw new Error('未找到会话。');
@@ -105,6 +133,18 @@ export const sendMessageToLLM = async ({
 
   const settings = useSettingsStore.getState();
   const systemPrompt = settings.systemPrompt || defaultSystemPrompt;
+  const effectiveUserName =
+    contact.selfName && contact.selfName.trim().length > 0
+      ? contact.selfName.trim()
+      : settings.userName && settings.userName.trim().length > 0
+        ? settings.userName.trim()
+        : '�û�';
+  const effectiveUserPrompt =
+    contact.selfPrompt && contact.selfPrompt.trim().length > 0
+      ? contact.selfPrompt.trim()
+      : settings.userPrompt && settings.userPrompt.trim().length > 0
+        ? settings.userPrompt.trim()
+        : '��δ�ṩ��';
 
   const history = await db.messages.where({ threadId }).sortBy('createdAt');
   const recentMessages = history.slice(-20);
@@ -114,16 +154,19 @@ export const sendMessageToLLM = async ({
       role: 'system',
       content: `${systemPrompt}
 ---
-角色信息：
-姓名：${contact.name}
-人设：${contact.prompt || '（未提供）'}
-世界书：${contact.worldBook && contact.worldBook.trim().length > 0 ? contact.worldBook : '（未提供）'}`
+��ɫ��Ϣ��
+������${contact.name}
+���裺${contact.prompt || '��δ�ṩ��'}
+�����飺${contact.worldBook && contact.worldBook.trim().length > 0 ? contact.worldBook : '��δ�ṩ��'}
+
+�û���Ϣ��
+������${effectiveUserName}
+�����飺${effectiveUserPrompt}`
     },
     ...recentMessages.map((message) => ({
       role: message.role,
       content: message.content
-    })),
-    { role: 'user', content: userMessage }
+    }))
   ];
 
   const { content } = await chatCompletion({
