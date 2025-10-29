@@ -1,4 +1,13 @@
-import { FormEvent, SVGProps, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChangeEvent,
+  FormEvent,
+  SVGProps,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -8,8 +17,12 @@ import {
   createContact,
   DEFAULT_TOKEN_LIMIT,
   deleteContact,
+  MIN_TOKEN_LIMIT,
+  MAX_TOKEN_LIMIT,
   persistMessage,
   sendMessageToLLM,
+  summarizeThreadLongMemory,
+  TOKEN_LIMIT_STEP,
   updateContact
 } from '../../services/chatService';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -24,7 +37,23 @@ const randomColor = () => {
   return palette[Math.floor(Math.random() * palette.length)];
 };
 
-const MIN_TOKEN_LIMIT = 500;
+const formatTokensShort = (value: number) => {
+  if (value <= 0) {
+    return '0k';
+  }
+  const thousands = value / 1000;
+  const precision = thousands >= 10 || Number.isInteger(thousands) ? 0 : 1;
+  const formatted = thousands.toFixed(precision).replace(/\.0$/, '');
+  return `${formatted}k`;
+};
+const snapToTokenStep = (value: number) => {
+  if (Number.isNaN(value) || !Number.isFinite(value)) {
+    return DEFAULT_TOKEN_LIMIT;
+  }
+  const clamped = Math.min(MAX_TOKEN_LIMIT, Math.max(MIN_TOKEN_LIMIT, value));
+  const steps = Math.round(clamped / TOKEN_LIMIT_STEP);
+  return Math.max(MIN_TOKEN_LIMIT, Math.min(MAX_TOKEN_LIMIT, steps * TOKEN_LIMIT_STEP));
+};
 
 const ContactAvatar = ({
   contact,
@@ -332,12 +361,16 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
   const [avatarColor, setAvatarColor] = useState(contact.avatarColor);
   const [worldBook, setWorldBook] = useState(contact.worldBook ?? '');
   const [avatarUrl, setAvatarUrl] = useState(contact.avatarUrl ?? '');
-  const [avatarIcon, setAvatarIcon] = useState<ContactIconName | ''>(contact.avatarIcon ?? '');
+  const [avatarIcon, setAvatarIcon] = useState<ContactIconName | ''>(
+    contact.avatarIcon ? (contact.avatarIcon as ContactIconName) : ''
+  );
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
   const [selfName, setSelfName] = useState(contact.selfName ?? '');
   const [selfPrompt, setSelfPrompt] = useState(contact.selfPrompt ?? '');
   const [selfAvatarUrl, setSelfAvatarUrl] = useState(contact.selfAvatarUrl ?? '');
-  const [selfAvatarIcon, setSelfAvatarIcon] = useState<ContactIconName | ''>(contact.selfAvatarIcon ?? '');
+  const [selfAvatarIcon, setSelfAvatarIcon] = useState<ContactIconName | ''>(
+    contact.selfAvatarIcon ? (contact.selfAvatarIcon as ContactIconName) : ''
+  );
   const [selfAvatarColor, setSelfAvatarColor] = useState(
     (contact.selfAvatarColor ?? globalUserSettings.userAvatarColor) || '#0ea5e9'
   );
@@ -346,8 +379,8 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tokenLimitInput, setTokenLimitInput] = useState(
-    () => String(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT)
+  const [tokenLimitInput, setTokenLimitInput] = useState(() =>
+    snapToTokenStep(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT)
   );
   const trimmedAvatarUrl = avatarUrl.trim();
   const resolvedAvatarIcon = trimmedAvatarUrl ? '' : (avatarIcon || contact.avatarIcon || '');
@@ -366,18 +399,14 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
     setIsSelfAvatarColorCustom(false);
   };
   useEffect(() => {
-    setTokenLimitInput(String(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT));
+    setTokenLimitInput(snapToTokenStep(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT));
   }, [contact.id, contact.tokenLimit]);
-  const resolvedTokenLimit = useMemo(() => {
-    const numericValue = parseInt(tokenLimitInput, 10);
-    if (Number.isNaN(numericValue)) {
-      return DEFAULT_TOKEN_LIMIT;
-    }
-    return Math.max(MIN_TOKEN_LIMIT, Math.floor(numericValue));
-  }, [tokenLimitInput]);
+  const resolvedTokenLimit = useMemo(
+    () => snapToTokenStep(tokenLimitInput),
+    [tokenLimitInput]
+  );
   const currentTokenUsage = tokenStats?.currentTokens ?? 0;
-  const currentContextLimit = Math.max(
-    MIN_TOKEN_LIMIT,
+  const currentContextLimit = snapToTokenStep(
     tokenStats?.tokenLimit ?? contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT
   );
   const isOverContextLimit = currentTokenUsage > currentContextLimit;
@@ -559,21 +588,39 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
 
         <label className="block text-sm text-white/70">
           对话上下文 Token 上限
-          <input
-            type="number"
-            value={tokenLimitInput}
-            onChange={(event) => setTokenLimitInput(event.target.value)}
-            min={MIN_TOKEN_LIMIT}
-            step={100}
-            className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
-            placeholder={`至少 ${MIN_TOKEN_LIMIT}`}
-          />
-          <p className={`mt-1 text-xs ${isOverContextLimit ? 'text-rose-200' : 'text-white/55'}`}>
-            当前上下文 token：{currentTokenUsage.toLocaleString()} / {currentContextLimit.toLocaleString()}
+          <div className="mt-2 flex items-center gap-3">
+            <input
+              type="range"
+              min={MIN_TOKEN_LIMIT}
+              max={MAX_TOKEN_LIMIT}
+              step={TOKEN_LIMIT_STEP}
+              value={tokenLimitInput}
+              onChange={(event) => setTokenLimitInput(snapToTokenStep(Number(event.target.value)))}
+              className="flex-1 accent-cyan-400"
+              aria-valuemin={MIN_TOKEN_LIMIT}
+              aria-valuemax={MAX_TOKEN_LIMIT}
+              aria-valuenow={tokenLimitInput}
+              aria-valuetext={formatTokensShort(tokenLimitInput)}
+            />
+            <span
+              className="w-16 text-right text-sm font-semibold text-white/80"
+              title={`${tokenLimitInput.toLocaleString()} tokens`}
+            >
+              {formatTokensShort(tokenLimitInput)}
+            </span>
+          </div>
+          <p
+            className={`mt-2 text-xs ${isOverContextLimit ? 'text-rose-200' : 'text-white/55'}`}
+            title={`当前上下文 token：${currentTokenUsage.toLocaleString()} / ${currentContextLimit.toLocaleString()}`}
+          >
+            当前上下文 token：{formatTokensShort(currentTokenUsage)} / {formatTokensShort(currentContextLimit)}
           </p>
           {limitWillChange ? (
-            <p className="mt-1 text-xs text-white/40">
-              保存后新的上限：{resolvedTokenLimit.toLocaleString()}
+            <p
+              className="mt-1 text-xs text-white/40"
+              title={`保存后新的上限：${resolvedTokenLimit.toLocaleString()} tokens`}
+            >
+              保存后新的上限：{formatTokensShort(resolvedTokenLimit)}
             </p>
           ) : null}
         </label>
@@ -860,11 +907,13 @@ const NewContactForm = ({
 const MessageBubble = ({
   message,
   contact,
-  userProfile
+  userProfile,
+  shouldAnimate = false
 }: {
   message: Message;
   contact?: Contact;
   userProfile: UserProfile;
+  shouldAnimate?: boolean;
 }) => {
   const isSelf = message.role === 'user';
 
@@ -888,7 +937,11 @@ const MessageBubble = ({
 
   return (
     <div className={`flex ${isSelf ? 'justify-end' : 'justify-start'}`}>
-      <div className="flex items-end gap-2 sm:gap-3">
+      <div
+        className={`flex items-end gap-2 sm:gap-3 ${
+          shouldAnimate ? 'message-appear' : ''
+        }`}
+      >
         {isSelf ? (
           <>
             {bubble}
@@ -905,17 +958,64 @@ const MessageBubble = ({
   );
 };
 
+const getMessageKey = (message: Message) =>
+  message.id !== undefined
+    ? `id-${message.id}`
+    : `temp-${message.threadId}-${message.createdAt}-${message.role}`;
+
 const ChatApp = () => {
   const { contactId } = useParams();
   const navigate = useNavigate();
   const [inputValue, setInputValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
 
   const settings = useSettingsStore();
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [visibleMessageKeys, setVisibleMessageKeys] = useState<string[]>([]);
+  const [animatingKeys, setAnimatingKeys] = useState<string[]>([]);
+  const revealTimeoutRef = useRef<number | null>(null);
+  const animationTimeoutsRef = useRef<Record<string, number>>({});
+
+  const clearRevealTimeout = useCallback(() => {
+    if (revealTimeoutRef.current !== null) {
+      window.clearTimeout(revealTimeoutRef.current);
+      revealTimeoutRef.current = null;
+    }
+  }, []);
+
+  const triggerBubbleAnimation = useCallback((key: string) => {
+    setAnimatingKeys((prev) => {
+      if (prev.includes(key)) {
+        return prev;
+      }
+      return [...prev, key];
+    });
+
+    if (animationTimeoutsRef.current[key]) {
+      window.clearTimeout(animationTimeoutsRef.current[key]);
+    }
+
+    animationTimeoutsRef.current[key] = window.setTimeout(() => {
+      setAnimatingKeys((prev) => prev.filter((item) => item !== key));
+      delete animationTimeoutsRef.current[key];
+    }, 480);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearRevealTimeout();
+      Object.values(animationTimeoutsRef.current).forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+      animationTimeoutsRef.current = {};
+    };
+  }, [clearRevealTimeout]);
 
   useEffect(() => {
     if (!settings.isLoaded) {
@@ -938,6 +1038,10 @@ const ChatApp = () => {
     }
   }, [contactId, contacts, navigate]);
 
+  useEffect(() => {
+    setShowMoreOptions(false);
+  }, [contactId]);
+
   const activeThread = useMemo(() => {
     if (!threads || !contactId) {
       return undefined;
@@ -945,18 +1049,99 @@ const ChatApp = () => {
     return threads.find((thread) => thread.contactId === contactId);
   }, [threads, contactId]);
 
-  const messages = useLiveQuery(
+  const messages = useLiveQuery<Message[]>(
     () =>
       contactId && activeThread
         ? db.messages.where({ threadId: activeThread.id }).sortBy('createdAt')
-        : Promise.resolve([]),
+        : Promise.resolve<Message[]>([]),
     [activeThread?.id, contactId]
   );
 
   const activeContact = contacts?.find((contact) => contact.id === contactId);
 
   useEffect(() => {
+    clearRevealTimeout();
+    Object.values(animationTimeoutsRef.current).forEach((timeoutId) => {
+      window.clearTimeout(timeoutId);
+    });
+    animationTimeoutsRef.current = {};
+    setVisibleMessageKeys([]);
+    setAnimatingKeys([]);
+  }, [activeThread?.id, clearRevealTimeout]);
+
+  useEffect(() => {
+    if (!messages) {
+      return;
+    }
+
+    const orderedKeys = messages.map(getMessageKey);
+
+    if (orderedKeys.length === 0) {
+      if (visibleMessageKeys.length > 0) {
+        setVisibleMessageKeys([]);
+      }
+      return;
+    }
+
+    const alignedKeys = orderedKeys.filter((key) => visibleMessageKeys.includes(key));
+    if (alignedKeys.length !== visibleMessageKeys.length) {
+      setVisibleMessageKeys(alignedKeys);
+      return;
+    }
+
+    if (visibleMessageKeys.length === 0) {
+      setVisibleMessageKeys(orderedKeys);
+      return;
+    }
+
+    const existingKeys = new Set(visibleMessageKeys);
+    const queue = orderedKeys.filter((key) => !existingKeys.has(key));
+
+    if (queue.length === 0) {
+      return;
+    }
+
+    clearRevealTimeout();
+
+    let index = 0;
+    const revealNext = () => {
+      const key = queue[index];
+      setVisibleMessageKeys((prev) => {
+        const baseSet = new Set(prev);
+        baseSet.add(key);
+        return orderedKeys.filter((item) => baseSet.has(item));
+      });
+      triggerBubbleAnimation(key);
+      index += 1;
+      if (index < queue.length) {
+        revealTimeoutRef.current = window.setTimeout(revealNext, 280);
+      } else {
+        revealTimeoutRef.current = null;
+      }
+    };
+
+    revealTimeoutRef.current = window.setTimeout(revealNext, 120);
+
+    return () => {
+      clearRevealTimeout();
+    };
+  }, [messages, visibleMessageKeys, clearRevealTimeout, triggerBubbleAnimation]);
+
+  const visibleMessages = useMemo(() => {
     if (!messages || messages.length === 0) {
+      return [];
+    }
+    if (visibleMessageKeys.length === 0) {
+      return messages;
+    }
+    const keySet = new Set(visibleMessageKeys);
+    return messages.filter((message) => keySet.has(getMessageKey(message)));
+  }, [messages, visibleMessageKeys]);
+
+  const animatingKeySet = useMemo(() => new Set(animatingKeys), [animatingKeys]);
+
+  useEffect(() => {
+    if (visibleMessages.length === 0) {
       return;
     }
     const container = messagesContainerRef.current;
@@ -967,7 +1152,7 @@ const ChatApp = () => {
       top: container.scrollHeight,
       behavior: 'smooth'
     });
-  }, [activeThread?.id, messages?.length]);
+  }, [activeThread?.id, visibleMessages.length]);
 
   const pendingUserMessages = useMemo(() => {
     if (!messages || messages.length === 0) {
@@ -1069,6 +1254,28 @@ const ChatApp = () => {
   ]);
   const hasPendingUserMessages = pendingUserMessages.length > 0;
   const trimmedInputValue = inputValue.trim();
+  const hasApiKey = settings.apiKey.trim().length > 0;
+  const canSummarizeLongMemory =
+    Boolean(activeThread && messages && messages.length > 0 && hasApiKey);
+
+  const syncTextareaHeight = (textarea: HTMLTextAreaElement | null) => {
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    const minHeight = 38;
+    const nextHeight = Math.max(textarea.scrollHeight, minHeight);
+    textarea.style.height = `${nextHeight}px`;
+  };
+
+  useEffect(() => {
+    syncTextareaHeight(textareaRef.current);
+  }, [inputValue]);
+
+  const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    syncTextareaHeight(event.currentTarget);
+    setInputValue(event.currentTarget.value);
+  };
 
   const handleSelectContact = (id: string) => {
     navigate(`/apps/chat/${id}`);
@@ -1078,7 +1285,23 @@ const ChatApp = () => {
     navigate('/apps/chat');
   };
 
-  
+  const handleSummarizeLongMemory = async () => {
+    if (!activeThread || isSummarizing) {
+      return;
+    }
+
+    try {
+      setIsSummarizing(true);
+      await summarizeThreadLongMemory({ threadId: activeThread.id });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : '生成总结失败，请稍后重试。';
+      setError(message);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
 const requestAssistantReply = async () => {
     if (!activeThread || !contactId) {
       return;
@@ -1289,15 +1512,19 @@ const requestAssistantReply = async () => {
             ref={messagesContainerRef}
             className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8"
           >
-            {messages && messages.length > 0 ? (
-              messages.map((message) => (
-                <MessageBubble
-                  key={message.id ?? message.createdAt}
-                  message={message}
-                  contact={activeContact}
-                  userProfile={userProfile}
-                />
-              ))
+            {visibleMessages.length > 0 ? (
+              visibleMessages.map((message) => {
+                const messageKey = getMessageKey(message);
+                return (
+                  <MessageBubble
+                    key={messageKey}
+                    message={message}
+                    contact={activeContact}
+                    userProfile={userProfile}
+                    shouldAnimate={animatingKeySet.has(messageKey)}
+                  />
+                );
+              })
             ) : (
               <div className="mt-24 text-center text-white/60">
                 发送第一条消息，开始和角色的故事吧。
@@ -1312,12 +1539,22 @@ const requestAssistantReply = async () => {
               </div>
             ) : null}
             <div className="flex flex-wrap items-end gap-3 sm:flex-nowrap">
+              <button
+                type="button"
+                onClick={() => setShowMoreOptions((prev) => !prev)}
+                className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
+                aria-label={showMoreOptions ? '收起更多功能' : '展开更多功能'}
+              >
+                <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
               <textarea
+                ref={textareaRef}
                 value={inputValue}
-                onChange={(event) => setInputValue(event.target.value)}
+                onChange={handleInputChange}
                 rows={1}
-                placeholder={activeContact ? '输入消息，可多条发送后一起请求回复…' : '请先在左侧选择一个角色'}
-                className="min-w-[240px] flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60 sm:h-12"
+                className="min-h-[38px] min-w-[240px] flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60"
                 disabled={!activeThread || isSending}
               />
               <div className="flex flex-wrap gap-2 sm:flex-nowrap">
@@ -1326,8 +1563,7 @@ const requestAssistantReply = async () => {
                   type="button"
                   onClick={() => handleSendMessage({ requestReply: false })}
                   disabled={isSending || trimmedInputValue.length === 0 || !activeThread}
-                  className="rounded-3xl border border-white/20 px-4 py-2 text-sm text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  style={{padding: '11px'}}
+                  className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <svg aria-hidden="true" className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
                       <use xlinkHref="#icon-up-arrow" />
@@ -1338,9 +1574,8 @@ const requestAssistantReply = async () => {
                   type="button"
                   onClick={() => handleSendMessage({ requestReply: true })}
                   disabled={isSending || !activeThread || (trimmedInputValue.length === 0 && !hasPendingUserMessages)}
-                  className="flex items-center gap-2 rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex h-[38px] w-[38px] items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 to-sky-500 text-sm font-semibold text-slate-900 shadow-lg shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
                   title="请求回复"
-                  style={{padding: '11px'}}
                 >
                   {isSending ? (
                     <svg
@@ -1367,6 +1602,49 @@ const requestAssistantReply = async () => {
                 </button>
               </div>
             </div>
+            {showMoreOptions ? (
+              <div className="flex flex-wrap gap-3 rounded-3xl border border-white/15 bg-white/5 px-4 py-3 text-white/80">
+                <button
+                  type="button"
+                  onClick={handleSummarizeLongMemory}
+                  disabled={!canSummarizeLongMemory || isSummarizing}
+                  className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="总结前文，生成长期记忆"
+                >
+                  {isSummarizing ? (
+                    <svg
+                      className="h-4 w-4 animate-spin text-white"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path
+                        className="opacity-90"
+                        d="M4 12a8 8 0 0 1 8-8"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  ) : (
+                    <span className="font-medium text-white">总结</span>
+                  )}
+                  <span className="sr-only">总结前文</span>
+                </button>
+                {['功能 B', '功能 C'].map((label) => (
+                  <button
+                    key={label}
+                    type="button"
+                    className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    title={label}
+                    disabled
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </footer>
         </section>
       </div>

@@ -10,6 +10,7 @@ export interface Contact {
   avatarUrl?: string;
   prompt: string;
   worldBook?: string;
+  longMemory?: string;
   selfName?: string;
   selfAvatarColor?: string;
   selfAvatarIcon?: string;
@@ -67,7 +68,9 @@ export const settingsKeys = {
   userAvatarColor: 'userAvatarColor',
   userAvatarIcon: 'userAvatarIcon',
   userAvatarUrl: 'userAvatarUrl',
-  userPrompt: 'userPrompt'
+  userPrompt: 'userPrompt',
+  wallpaperUrl: 'wallpaperUrl',
+  wallpaperGallery: 'wallpaperGallery'
 } as const;
 
 export type SettingsKeys = keyof typeof settingsKeys;

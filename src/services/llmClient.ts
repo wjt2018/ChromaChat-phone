@@ -93,7 +93,7 @@ export async function listModels({
     Array.isArray(payload?.data) && payload.data.length > 0
       ? payload.data
           .map((item: { id?: string }) => item?.id)
-          .filter((id): id is string => Boolean(id))
+          .filter((id: string | undefined): id is string => Boolean(id))
       : [];
 
   return models.sort((a, b) => a.localeCompare(b));

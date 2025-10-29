@@ -1,9 +1,10 @@
-import { FormEvent, useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 
 import { chatCompletion, listModels } from '../../services/llmClient';
 import { CONTACT_ICON_OPTIONS } from '../../constants/icons';
-import { defaultSystemPrompt, useSettingsStore } from '../../stores/settingsStore';
+import { WALLPAPER_PRESETS } from '../../constants/wallpapers';
+import { DEFAULT_WALLPAPER, defaultSystemPrompt, useSettingsStore } from '../../stores/settingsStore';
 
 const AvatarPreview = ({
   name,
@@ -63,11 +64,41 @@ const SettingsApp = () => {
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const [isUserIconPickerOpen, setIsUserIconPickerOpen] = useState(false);
+  const [wallpaperInput, setWallpaperInput] = useState(
+    settings.wallpaperUrl?.trim() || DEFAULT_WALLPAPER
+  );
+  const [showPresetWallpapers, setShowPresetWallpapers] = useState(false);
 
   const trimmedUserAvatarUrl = settings.userAvatarUrl.trim();
   const resolvedUserAvatarIcon = trimmedUserAvatarUrl ? '' : settings.userAvatarIcon;
   const userAvatarColor = settings.userAvatarColor || '#0ea5e9';
   const userNamePreview = settings.userName.trim() || '我';
+  const currentWallpaper = settings.wallpaperUrl?.trim() || DEFAULT_WALLPAPER;
+  const trimmedWallpaperInput = wallpaperInput.trim();
+  const isWallpaperApplyDisabled =
+    trimmedWallpaperInput.length === 0 || trimmedWallpaperInput === currentWallpaper;
+  const wallpaperGallery = settings.wallpaperGallery ?? [];
+  const customWallpapers = useMemo(() => {
+    const presetSet = new Set(WALLPAPER_PRESETS);
+    const seen = new Set<string>();
+    return wallpaperGallery
+      .map((item) => item?.trim())
+      .filter((item): item is string => Boolean(item))
+      .filter((item) => {
+        if (presetSet.has(item)) {
+          return false;
+        }
+        if (seen.has(item)) {
+          return false;
+        }
+        seen.add(item);
+        return true;
+      });
+  }, [wallpaperGallery]);
+
+  useEffect(() => {
+    setWallpaperInput(settings.wallpaperUrl?.trim() || DEFAULT_WALLPAPER);
+  }, [settings.wallpaperUrl]);
 
   useEffect(() => {
     if (!settings.isLoaded) {
@@ -117,6 +148,60 @@ const SettingsApp = () => {
       }
     },
     [settings.apiKey, settings.baseUrl, settings.model, settings.updateSettings]
+  );
+
+  const handleSelectWallpaper = useCallback(
+    (url: string) => {
+      const next = url.trim();
+      setWallpaperInput(next);
+      void settings.updateSettings({ wallpaperUrl: next.length > 0 ? next : DEFAULT_WALLPAPER });
+    },
+    [settings]
+  );
+
+  const handleApplyWallpaper = useCallback(() => {
+    const next = wallpaperInput.trim() || DEFAULT_WALLPAPER;
+    const gallery = settings.wallpaperGallery ?? [];
+    setWallpaperInput(next);
+    const isPreset = WALLPAPER_PRESETS.includes(next);
+    const isInGallery = gallery.includes(next);
+
+    if (!isPreset && !isInGallery) {
+      void settings.updateSettings({
+        wallpaperUrl: next,
+        wallpaperGallery: [...gallery, next]
+      });
+      return;
+    }
+
+    void settings.updateSettings({ wallpaperUrl: next });
+  }, [settings, wallpaperInput]);
+
+  const handleResetWallpaper = useCallback(() => {
+    setWallpaperInput(DEFAULT_WALLPAPER);
+    void settings.updateSettings({ wallpaperUrl: DEFAULT_WALLPAPER });
+  }, [settings]);
+
+  const handleDeleteWallpaper = useCallback(
+    (url: string) => {
+      const gallery = settings.wallpaperGallery ?? [];
+      if (!gallery.includes(url)) {
+        return;
+      }
+      const nextGallery = gallery.filter((item) => item !== url);
+      const updates: {
+        wallpaperGallery: string[];
+        wallpaperUrl?: string;
+      } = {
+        wallpaperGallery: nextGallery
+      };
+      if (settings.wallpaperUrl === url) {
+        updates.wallpaperUrl = DEFAULT_WALLPAPER;
+        setWallpaperInput(DEFAULT_WALLPAPER);
+      }
+      void settings.updateSettings(updates);
+    },
+    [settings]
   );
 
   useEffect(() => {
@@ -182,24 +267,23 @@ const SettingsApp = () => {
   const placeholderStyle: CSSProperties = { color: '#1e293b', opacity: 0.7, backgroundColor: '#f8fafc' };
 
   return (
-    <div className="flex flex-1 flex-col gap-6 bg-gradient-to-br from-white/10 via-white/5 to-white/10 p-6 backdrop-blur-xl" style={{overflow: 'auto'}}>
-      <header className="flex flex-col gap-4 px-2">
+    <div
+      className="flex flex-1 flex-col gap-6 bg-gradient-to-b from-slate-900 via-slate-900/95 to-slate-900 px-6 pb-6"
+      style={{ overflow: 'auto' }}
+    >
+      <header className="-mx-6 sticky top-0 z-20 flex items-center justify-between border-b border-slate-800 bg-slate-900 px-6 py-3 shadow-[0_1px_0_rgba(15,23,42,0.6)]">
         <Link
           to="/"
           aria-label="返回"
-          className="inline-flex w-max items-center gap-2 rounded-2xl border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold text-white/80 shadow-glass transition hover:border-white/60 hover:bg-white/20"
-          title='返回'
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 text-white transition hover:bg-slate-700 active:bg-slate-600"
+          title="返回"
         >
           <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
             <use xlinkHref="#icon-left-arrow" />
           </svg>
         </Link>
-        <div>
-          <h1 className="text-2xl font-semibold text-white">设置</h1>
-          <p className="mt-2 text-sm text-white/70">
-            配置你的 LLM 接入信息，支持自定义系统提示词，打造更真实的角色体验。
-          </p>
-        </div>
+        <h1 className="text-base font-semibold text-white">设置</h1>
+        <div aria-hidden="true" className="h-9 w-9" />
       </header>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
@@ -328,6 +412,164 @@ const SettingsApp = () => {
             </label>
           </div>
         </section>
+
+        <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">桌面壁纸</h2>
+              <p className="text-xs text-white/60">选择默认壁纸或粘贴图片链接，自定义桌面背景。</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleResetWallpaper}
+              className="rounded-2xl border border-white/20 px-4 py-2 text-xs font-medium text-white/80 transition hover:border-white/40 hover:bg-white/20"
+            >
+              恢复默认壁纸
+            </button>
+          </div>
+          <div className="mt-4 space-y-6">
+            <div className="rounded-2xl border border-white/10 bg-white/5">
+              <button
+                type="button"
+                onClick={() => setShowPresetWallpapers((prev) => !prev)}
+                aria-expanded={showPresetWallpapers}
+                className="flex w-full items-center justify-between px-4 py-3 text-xs font-semibold uppercase tracking-wide text-white/70 transition hover:bg-white/10"
+              >
+                <span>默认壁纸</span>
+                <svg
+                  aria-hidden="true"
+                  className={`h-3 w-3 transition-transform ${showPresetWallpapers ? 'rotate-180' : ''}`}
+                  viewBox="0 0 12 12"
+                  fill="none"
+                >
+                  <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {showPresetWallpapers ? (
+                <div className="border-t border-white/10 px-4 pb-4 pt-3">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {WALLPAPER_PRESETS.map((url, index) => {
+                      const isActive = currentWallpaper === url;
+                      return (
+                        <button
+                          type="button"
+                          key={url}
+                          onClick={() => handleSelectWallpaper(url)}
+                          className={`group relative overflow-hidden rounded-2xl border transition ${
+                            isActive
+                              ? 'border-cyan-300 ring-2 ring-cyan-400/70'
+                              : 'border-white/15 hover:border-white/40'
+                          }`}
+                          aria-pressed={isActive}
+                          title={`默认壁纸 ${index + 1}`}
+                          style={{ aspectRatio: '9 / 16' }}
+                        >
+                          <img
+                            src={url}
+                            alt={`默认壁纸 ${index + 1}`}
+                            loading="lazy"
+                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                          />
+                          {isActive ? (
+                            <span
+                              className="pointer-events-none absolute inset-0 bg-cyan-400/15 mix-blend-screen"
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {customWallpapers.length > 0 ? (
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-white/50">我的壁纸</h3>
+                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {customWallpapers.map((url) => {
+                    const isActive = currentWallpaper === url;
+                    return (
+                      <div
+                        key={url}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleSelectWallpaper(url)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            handleSelectWallpaper(url);
+                          }
+                        }}
+                        className={`group relative cursor-pointer overflow-hidden rounded-2xl border transition ${
+                          isActive
+                            ? 'border-cyan-300 ring-2 ring-cyan-400/70'
+                            : 'border-white/15 hover:border-white/40'
+                        }`}
+                        style={{ aspectRatio: '9 / 16' }}
+                      >
+                        <img
+                          src={url}
+                          alt="自定义壁纸"
+                          loading="lazy"
+                          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        />
+                        {isActive ? (
+                          <span
+                            className="pointer-events-none absolute inset-0 bg-cyan-400/15 mix-blend-screen"
+                            aria-hidden="true"
+                          />
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleDeleteWallpaper(url);
+                          }}
+                          className="absolute right-2 top-2 rounded-full bg-slate-950/70 px-2 py-1 text-xs text-white/80 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            <div>
+              <label className="block text-sm text-white/70">
+                自定义壁纸 URL
+                <input
+                  value={wallpaperInput}
+                  onChange={(event) => setWallpaperInput(event.target.value)}
+                  placeholder="https://example.com/wallpaper.png"
+                  className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
+                />
+              </label>
+              <div className="mt-3 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleApplyWallpaper}
+                  disabled={isWallpaperApplyDisabled}
+                  className="rounded-2xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-2 text-sm font-semibold text-slate-900 shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  应用壁纸
+                </button>
+                <a
+                  href={trimmedWallpaperInput.length > 0 ? trimmedWallpaperInput : currentWallpaper}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center rounded-2xl border border-white/20 px-4 py-2 text-xs font-medium text-white/80 transition hover:border-white/40 hover:bg-white/20"
+                >
+                  预览原图
+                </a>
+              </div>
+              <p className="mt-2 text-xs text-white/50">
+                建议使用竖屏高清图片（例如 1242×2688），以获得最佳展示效果。
+              </p>
+            </div>
+          </div>
+        </section>
         <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
           <h2 className="text-lg font-semibold text-white">API 配置</h2>
           <p className="mt-1 text-xs text-white/60">
@@ -395,6 +637,41 @@ const SettingsApp = () => {
               {modelError ? <p className="mt-2 text-xs text-red-200">{modelError}</p> : null}
             </label>
           </div>
+                    <div className="mt-8 border-t border-white/10 pt-6">
+            <h3 className="text-lg font-semibold text-white">连接测试</h3>
+            <p className="mt-1 text-xs text-white/60">
+              提交后会发送一条简短消息，验证接口是否可用。
+            </p>
+
+            {testStatus ? (
+              <div
+                className={`mt-3 rounded-2xl px-4 py-3 text-xs ${
+                  testStatus.type === 'success'
+                    ? 'bg-emerald-400/20 text-emerald-200'
+                    : 'bg-red-400/20 text-red-200'
+                }`}
+              >
+                {testStatus.message}
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="submit"
+                disabled={isTesting}
+                className="rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-2 text-sm font-semibold text-slate-900 shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isTesting ? '测试中...' : '测试连接'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void settings.resetToDefaults()}
+                className="rounded-3xl border border-white/20 px-5 py-2 text-sm text-white/80 transition hover:bg白/10"
+              >
+                清除密钥
+              </button>
+            </div>
+          </div>
         </section>
 
         <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
@@ -421,41 +698,6 @@ const SettingsApp = () => {
           />
         </section>
 
-        <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
-          <h2 className="text-lg font-semibold text-white">连接测试</h2>
-          <p className="mt-1 text-xs text-white/60">
-            提交后会发送一条简短消息，验证接口是否可用。
-          </p>
-
-          {testStatus ? (
-            <div
-              className={`mt-3 rounded-2xl px-4 py-3 text-xs ${
-                testStatus.type === 'success'
-                  ? 'bg-emerald-400/20 text-emerald-200'
-                  : 'bg-red-400/20 text-red-200'
-              }`}
-            >
-              {testStatus.message}
-            </div>
-          ) : null}
-
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              type="submit"
-              disabled={isTesting}
-              className="rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-2 text-sm font-semibold text-slate-900 shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isTesting ? '测试中...' : '测试连接'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void settings.resetToDefaults()}
-              className="rounded-3xl border border-white/20 px-5 py-2 text-sm text-white/80 transition hover:bg-white/10"
-            >
-              清除密钥
-            </button>
-          </div>
-        </section>
       </form>
     </div>
   );

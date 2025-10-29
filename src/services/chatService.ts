@@ -8,8 +8,10 @@ const generateId = () => crypto.randomUUID();
 type SettingsSnapshot = ReturnType<typeof useSettingsStore.getState>;
 type PromptSettingsSnapshot = Pick<SettingsSnapshot, 'systemPrompt' | 'userName' | 'userPrompt' | 'model'>;
 
-export const DEFAULT_TOKEN_LIMIT = 4000;
-const MIN_TOKEN_LIMIT = 500;
+export const DEFAULT_TOKEN_LIMIT = 16000;
+export const MAX_TOKEN_LIMIT = 128000;
+export const TOKEN_LIMIT_STEP = 500;
+export const MIN_TOKEN_LIMIT = 500;
 const MESSAGE_TOKEN_OVERHEAD = 4;
 const SYSTEM_TOKEN_OVERHEAD = 12;
 
@@ -19,13 +21,18 @@ const resolveTokenLimit = (tokenLimit?: number) => {
   if (typeof tokenLimit !== 'number' || Number.isNaN(tokenLimit)) {
     return DEFAULT_TOKEN_LIMIT;
   }
-  return Math.max(MIN_TOKEN_LIMIT, Math.floor(tokenLimit));
+  if (!Number.isFinite(tokenLimit)) {
+    return DEFAULT_TOKEN_LIMIT;
+  }
+  const clamped = Math.min(MAX_TOKEN_LIMIT, Math.max(MIN_TOKEN_LIMIT, Math.floor(tokenLimit)));
+  return clamped;
 };
 
 const buildSystemPromptContent = (contact: Contact, settings: PromptSettingsSnapshot) => {
   const baseSystemPrompt = sanitizeText(settings.systemPrompt) || defaultSystemPrompt;
   const rolePrompt = sanitizeText(contact.prompt) || '未提供';
   const worldBook = sanitizeText(contact.worldBook) || '未提供';
+  const longMemory = sanitizeText(contact.longMemory);
   const effectiveUserName =
     sanitizeText(contact.selfName) ||
     sanitizeText(settings.userName) ||
@@ -35,16 +42,27 @@ const buildSystemPromptContent = (contact: Contact, settings: PromptSettingsSnap
     sanitizeText(settings.userPrompt) ||
     '未提供';
 
-  return `${baseSystemPrompt}
----
-角色信息：
-名称：${contact.name}
-设定：${rolePrompt}
-世界观：${worldBook}
+  const sections = [
+    baseSystemPrompt,
+    '---',
+    '角色信息：',
+    `名称：${contact.name}`,
+    `设定：${rolePrompt}`,
+    `世界观：${worldBook}`
+  ];
 
-用户信息：
-名称：${effectiveUserName}
-设定：${effectiveUserPrompt}`;
+  if (longMemory) {
+    sections.push('', '长期记忆（结合下方信息时优先参考）：', longMemory);
+  }
+
+  sections.push(
+    '',
+    '用户信息：',
+    `名称：${effectiveUserName}`,
+    `设定：${effectiveUserPrompt}`
+  );
+
+  return sections.join('\n');
 };
 
 export type ChatPayload = {
@@ -168,6 +186,7 @@ export const updateContact = async (
       | 'selfAvatarIcon'
       | 'selfAvatarUrl'
       | 'selfPrompt'
+      | 'longMemory'
       | 'tokenLimit'
     >
   >
@@ -200,6 +219,11 @@ export const updateContact = async (
   if (typeof nextUpdates.selfPrompt === 'string') {
     const trimmed = nextUpdates.selfPrompt.trim();
     nextUpdates.selfPrompt = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof nextUpdates.longMemory === 'string') {
+    const trimmed = nextUpdates.longMemory.trim();
+    nextUpdates.longMemory = trimmed.length > 0 ? trimmed : undefined;
   }
 
   if ('tokenLimit' in nextUpdates) {
@@ -263,6 +287,91 @@ export const sendMessageToLLM = async ({ threadId }: { threadId: string }) => {
   });
 
   return content;
+};
+
+export const summarizeThreadLongMemory = async ({ threadId }: { threadId: string }) => {
+  const thread = await db.threads.get(threadId);
+  if (!thread) {
+    throw new Error('未找到会话。');
+  }
+
+  const contact = await db.contacts.get(thread.contactId);
+  if (!contact) {
+    throw new Error('未找到联系人。');
+  }
+
+  const settings = useSettingsStore.getState();
+  if (!settings.apiKey) {
+    throw new Error('请先在“设置”中填写 API Key。');
+  }
+
+  const history = await db.messages.where({ threadId }).sortBy('createdAt');
+  if (history.length === 0) {
+    throw new Error('暂无可总结的历史消息。');
+  }
+
+  const participantName = sanitizeText(contact.name) || '角色';
+  const rolePrompt = sanitizeText(contact.prompt) || '未提供';
+  const worldBook = sanitizeText(contact.worldBook) || '未提供';
+  const previousSummary = sanitizeText(contact.longMemory);
+
+  const transcript = history
+    .map((message) => {
+      const speaker =
+        message.role === 'assistant'
+          ? participantName
+          : message.role === 'user'
+          ? '用户'
+          : '系统';
+      return `${speaker}：${message.content}`;
+    })
+    .join('\n');
+
+  const summaryPrompt = [
+    `角色名称：${participantName}`,
+    `角色设定：${rolePrompt}`,
+    `世界观补充：${worldBook}`,
+    previousSummary ? `已有长期记忆：${previousSummary}` : null,
+    '---',
+    '以下是按时间顺序排列的最近对话内容，请提取对后续角色扮演最重要的事实、关系、计划或约定。',
+    '需要做到：',
+    '1. 只保留重要信息，删除寒暄、重复或无关内容；',
+    '2. 保持第一人称表达，突出用户与角色的共同记忆；',
+    '3. 若没有关键信息，可返回“暂无新的长期记忆”。',
+    '4. 每条记忆独立成段，便于阅读。',
+    '对话记录：',
+    transcript,
+    '',
+    '请在输出中直接写总结内容，禁止加入额外解释。'
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const { content } = await chatCompletion({
+    baseUrl: settings.baseUrl,
+    apiKey: settings.apiKey,
+    model: settings.model,
+    messages: [
+      {
+        role: 'system',
+        content:
+          '你是一个对话摘要助手，负责为虚拟角色扮演整理“长期记忆”，请输出可直接保存的中文总结。'
+      },
+      {
+        role: 'user',
+        content: summaryPrompt
+      }
+    ],
+    temperature: 0.2
+  });
+
+  const summary = content.trim();
+
+  await db.contacts.update(contact.id, {
+    longMemory: summary.length > 0 ? summary : undefined
+  });
+
+  return summary;
 };
 
 export const persistMessage = async ({

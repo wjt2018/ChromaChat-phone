@@ -16,11 +16,16 @@ interface SettingsState {
   userAvatarIcon: string;
   userAvatarUrl: string;
   userPrompt: string;
+  wallpaperUrl: string;
+  wallpaperGallery: string[];
   isLoaded: boolean;
   load: () => Promise<void>;
   updateSettings: (changes: Partial<Omit<SettingsState, 'isLoaded' | 'load' | 'updateSettings'>>) => Promise<void>;
   resetToDefaults: () => Promise<void>;
 }
+
+export const DEFAULT_WALLPAPER =
+  'https://cdn.mujian.me/tuchuang/690061e703902.webp';
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   baseUrl: '',
@@ -32,9 +37,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   userAvatarIcon: '',
   userAvatarUrl: '',
   userPrompt: '',
+  wallpaperUrl: DEFAULT_WALLPAPER,
+  wallpaperGallery: [],
   isLoaded: false,
   load: async () => {
-    const [baseUrl, apiKey, model, systemPrompt, userName, userAvatarColor, userAvatarIcon, userAvatarUrl, userPrompt] = await Promise.all([
+    const [
+      baseUrl,
+      apiKey,
+      model,
+      systemPrompt,
+      userName,
+      userAvatarColor,
+      userAvatarIcon,
+      userAvatarUrl,
+      userPrompt,
+      wallpaperUrl,
+      wallpaperGallery
+    ] = await Promise.all([
       getSetting(settingsKeys.baseUrl, ''),
       getSetting(settingsKeys.apiKey, ''),
       getSetting(settingsKeys.model, 'gpt-4o-mini'),
@@ -43,7 +62,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       getSetting(settingsKeys.userAvatarColor, '#0ea5e9'),
       getSetting(settingsKeys.userAvatarIcon, ''),
       getSetting(settingsKeys.userAvatarUrl, ''),
-      getSetting(settingsKeys.userPrompt, '')
+      getSetting(settingsKeys.userPrompt, ''),
+      getSetting(settingsKeys.wallpaperUrl, DEFAULT_WALLPAPER),
+      getSetting(settingsKeys.wallpaperGallery, [])
     ]);
     set({
       baseUrl,
@@ -55,6 +76,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       userAvatarIcon,
       userAvatarUrl,
       userPrompt,
+      wallpaperUrl,
+      wallpaperGallery: Array.isArray(wallpaperGallery) ? wallpaperGallery : [],
       isLoaded: true
     });
   },
@@ -79,7 +102,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       userAvatarColor: '#0ea5e9',
       userAvatarIcon: '',
       userAvatarUrl: '',
-      userPrompt: ''
+      userPrompt: '',
+      wallpaperUrl: DEFAULT_WALLPAPER,
+      wallpaperGallery: []
     };
 
     await Promise.all(
