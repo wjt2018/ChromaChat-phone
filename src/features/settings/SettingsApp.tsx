@@ -287,132 +287,113 @@ const SettingsApp = () => {
       </header>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+
+        {/* API配置 */}
         <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-white">我的信息（全局）</h2>
-              <p className="text-xs text-white/60">
-                这里的设置会作为默认的用户身份参与所有对话，可在联系人详情中针对单个聊天单独覆盖。
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleResetUserProfile}
-              className="rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-white/75 transition hover:border-white/40 hover:bg-white/20"
-            >
-              重置个人信息
-            </button>
-          </div>
+          <h2 className="text-lg font-semibold text-white">API 配置</h2>
+          <p className="mt-1 text-xs text-white/60">
+            支持 OpenAI 兼容接口。请确保你的浏览器允许网络访问该地址。
+          </p>
           <div className="mt-4 space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
-                <AvatarPreview
-                  name={userNamePreview}
-                  color={userAvatarColor}
-                  icon={resolvedUserAvatarIcon || undefined}
-                  image={trimmedUserAvatarUrl || undefined}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsUserIconPickerOpen((prev) => !prev)}
-                    className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+            <label className="block text-sm text-white/70">
+              Base URL
+              <input
+                value={settings.baseUrl}
+                onChange={(event) => void settings.updateSettings({ baseUrl: event.target.value })}
+                placeholder="https://api.openai.com/v1"
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
+              />
+            </label>
+            <label className="block text-sm text-white/70">
+              API Key
+              <input
+                value={settings.apiKey}
+                onChange={(event) => void settings.updateSettings({ apiKey: event.target.value })}
+                type="password"
+                placeholder="sk-..."
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
+              />
+            </label>
+            <label className="block text-sm text-white/70">
+              Model Name
+              <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="relative w-full sm:w-2/3">
+                  <select
+                    value={selectValue}
+                    onChange={(event) => void settings.updateSettings({ model: event.target.value })}
+                    disabled={isModelLoading || modelOptions.length === 0}
+                    className="w-full appearance-none rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-medium text-white shadow-inner shadow-white/10 outline-none transition focus:border-cyan-200/60 focus:bg-white/20 focus:shadow-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    选择图标
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsUserIconPickerOpen(false);
-                      void settings.updateSettings({ userAvatarIcon: '', userAvatarUrl: '' });
-                    }}
-                    className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
-                  >
-                    清除图标
-                  </button>
+                    {isModelLoading ? (
+                      <option value="" style={placeholderStyle}>
+                        模型列表加载中...
+                      </option>
+                    ) : modelOptions.length === 0 ? (
+                      <option value="" style={placeholderStyle}>
+                        暂无可选模型
+                      </option>
+                    ) : (
+                      modelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId} style={optionStyle}>
+                          {modelId}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-white/70">
+                    ▼
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 sm:gap-4">
-                <input
-                  type="color"
-                  value={userAvatarColor}
-                  onChange={(event) =>
-                    void settings.updateSettings({ userAvatarColor: event.target.value })
-                  }
-                  className="h-10 w-32 cursor-pointer rounded-2xl border border-white/15 bg-transparent"
-                />
                 <button
                   type="button"
-                  onClick={() => void settings.updateSettings({ userAvatarColor: '#0ea5e9' })}
-                  className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+                  onClick={() => void loadModels()}
+                  disabled={isModelLoading || !settings.apiKey}
+                  className="rounded-2xl border border-white/20 px-4 py-2 text-xs font-medium text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  恢复默认颜色
+                  {isModelLoading ? '刷新中...' : '刷新列表'}
                 </button>
               </div>
-            </div>
-            {isUserIconPickerOpen && (
-              <div className="max-h-48 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div className="grid grid-cols-5 gap-3 sm:grid-cols-6">
-                  {CONTACT_ICON_OPTIONS.map((icon) => (
-                    <button
-                      type="button"
-                      key={icon}
-                      onClick={() => {
-                        void settings.updateSettings({ userAvatarIcon: icon, userAvatarUrl: '' });
-                        setIsUserIconPickerOpen(false);
-                      }}
-                      className={`flex h-12 w-12 items-center justify-center rounded-2xl border transition ${
-                        resolvedUserAvatarIcon === icon && !trimmedUserAvatarUrl
-                          ? 'border-cyan-300 bg-cyan-300/20 text-cyan-200'
-                          : 'border-white/15 bg-white/10 text-white/80 hover:border-white/40 hover:bg-white/20'
-                      }`}
-                    >
-                      <svg aria-hidden="true" className="h-7 w-7">
-                        <use xlinkHref={`#${icon}`} />
-                      </svg>
-                    </button>
-                  ))}
-                </div>
+              {modelError ? <p className="mt-2 text-xs text-red-200">{modelError}</p> : null}
+            </label>
+          </div>
+          <div className="mt-8 border-t border-white/10 pt-6">
+            <h3 className="text-lg font-semibold text-white">连接测试</h3>
+            <p className="mt-1 text-xs text-white/60">
+              提交后会发送一条简短消息，验证接口是否可用。
+            </p>
+
+            {testStatus ? (
+              <div
+                className={`mt-3 rounded-2xl px-4 py-3 text-xs ${
+                  testStatus.type === 'success'
+                    ? 'bg-emerald-400/20 text-emerald-200'
+                    : 'bg-red-400/20 text-red-200'
+                }`}
+              >
+                {testStatus.message}
               </div>
-            )}
-            <label className="block text-sm text-white/70">
-              姓名
-              <input
-                value={settings.userName}
-                onChange={(event) => void settings.updateSettings({ userName: event.target.value })}
-                placeholder="例如：小李"
-                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
-              />
-            </label>
-            <label className="block text-sm text-white/70">
-              头像图片地址
-              <input
-                value={settings.userAvatarUrl}
-                onChange={(event) =>
-                  void settings.updateSettings({ userAvatarUrl: event.target.value })
-                }
-                placeholder="https://example.com/me.png"
-                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
-              />
-              <span className="mt-1 block text-xs text-white/55">
-                如果填写图片地址，将优先显示图片；留空则使用图标与颜色。
-              </span>
-            </label>
-            <label className="block text-sm text-white/70">
-              个人设定
-              <textarea
-                value={settings.userPrompt}
-                onChange={(event) =>
-                  void settings.updateSettings({ userPrompt: event.target.value })
-                }
-                rows={4}
-                placeholder="描述你的身份、语气或希望 AI 了解的背景。"
-                className="mt-1 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
-              />
-            </label>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="submit"
+                disabled={isTesting}
+                className="rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-2 text-sm font-semibold text-slate-900 shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isTesting ? '测试中...' : '测试连接'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void settings.resetToDefaults()}
+                className="rounded-3xl border border-white/20 px-5 py-2 text-sm text-white/80 transition hover:bg白/10"
+              >
+                清除密钥
+              </button>
+            </div>
           </div>
         </section>
 
+        {/* 桌面壁纸设置 */}
         <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -570,110 +551,135 @@ const SettingsApp = () => {
             </div>
           </div>
         </section>
+        
+        {/* 用户信息设置 */}
         <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
-          <h2 className="text-lg font-semibold text-white">API 配置</h2>
-          <p className="mt-1 text-xs text-white/60">
-            支持 OpenAI 兼容接口。请确保你的浏览器允许网络访问该地址。
-          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">我的信息（全局）</h2>
+              <p className="text-xs text-white/60">
+                这里的设置会作为默认的用户身份参与所有对话，可在联系人详情中针对单个聊天单独覆盖。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleResetUserProfile}
+              className="rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-white/75 transition hover:border-white/40 hover:bg-white/20"
+            >
+              重置个人信息
+            </button>
+          </div>
           <div className="mt-4 space-y-4">
-            <label className="block text-sm text-white/70">
-              Base URL
-              <input
-                value={settings.baseUrl}
-                onChange={(event) => void settings.updateSettings({ baseUrl: event.target.value })}
-                placeholder="https://api.openai.com/v1"
-                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
-              />
-            </label>
-            <label className="block text-sm text-white/70">
-              API Key
-              <input
-                value={settings.apiKey}
-                onChange={(event) => void settings.updateSettings({ apiKey: event.target.value })}
-                type="password"
-                placeholder="sk-..."
-                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
-              />
-            </label>
-            <label className="block text-sm text-white/70">
-              Model Name
-              <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <div className="relative w-full sm:w-2/3">
-                  <select
-                    value={selectValue}
-                    onChange={(event) => void settings.updateSettings({ model: event.target.value })}
-                    disabled={isModelLoading || modelOptions.length === 0}
-                    className="w-full appearance-none rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-medium text-white shadow-inner shadow-white/10 outline-none transition focus:border-cyan-200/60 focus:bg-white/20 focus:shadow-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <AvatarPreview
+                  name={userNamePreview}
+                  color={userAvatarColor}
+                  icon={resolvedUserAvatarIcon || undefined}
+                  image={trimmedUserAvatarUrl || undefined}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsUserIconPickerOpen((prev) => !prev)}
+                    className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
                   >
-                    {isModelLoading ? (
-                      <option value="" style={placeholderStyle}>
-                        模型列表加载中...
-                      </option>
-                    ) : modelOptions.length === 0 ? (
-                      <option value="" style={placeholderStyle}>
-                        暂无可选模型
-                      </option>
-                    ) : (
-                      modelOptions.map((modelId) => (
-                        <option key={modelId} value={modelId} style={optionStyle}>
-                          {modelId}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-white/70">
-                    ▼
-                  </div>
+                    选择图标
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsUserIconPickerOpen(false);
+                      void settings.updateSettings({ userAvatarIcon: '', userAvatarUrl: '' });
+                    }}
+                    className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
+                  >
+                    清除图标
+                  </button>
                 </div>
+              </div>
+              <div className="flex items-center gap-3 sm:gap-4">
+                <input
+                  type="color"
+                  value={userAvatarColor}
+                  onChange={(event) =>
+                    void settings.updateSettings({ userAvatarColor: event.target.value })
+                  }
+                  className="h-10 w-32 cursor-pointer rounded-2xl border border-white/15 bg-transparent"
+                />
                 <button
                   type="button"
-                  onClick={() => void loadModels()}
-                  disabled={isModelLoading || !settings.apiKey}
-                  className="rounded-2xl border border-white/20 px-4 py-2 text-xs font-medium text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void settings.updateSettings({ userAvatarColor: '#0ea5e9' })}
+                  className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
                 >
-                  {isModelLoading ? '刷新中...' : '刷新列表'}
+                  恢复默认颜色
                 </button>
               </div>
-              {modelError ? <p className="mt-2 text-xs text-red-200">{modelError}</p> : null}
-            </label>
-          </div>
-                    <div className="mt-8 border-t border-white/10 pt-6">
-            <h3 className="text-lg font-semibold text-white">连接测试</h3>
-            <p className="mt-1 text-xs text-white/60">
-              提交后会发送一条简短消息，验证接口是否可用。
-            </p>
-
-            {testStatus ? (
-              <div
-                className={`mt-3 rounded-2xl px-4 py-3 text-xs ${
-                  testStatus.type === 'success'
-                    ? 'bg-emerald-400/20 text-emerald-200'
-                    : 'bg-red-400/20 text-red-200'
-                }`}
-              >
-                {testStatus.message}
-              </div>
-            ) : null}
-
-            <div className="mt-4 flex flex-wrap gap-3">
-              <button
-                type="submit"
-                disabled={isTesting}
-                className="rounded-3xl bg-gradient-to-r from-cyan-400 to-sky-500 px-5 py-2 text-sm font-semibold text-slate-900 shadow-cyan-500/30 transition hover:from-cyan-300 hover:to-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isTesting ? '测试中...' : '测试连接'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void settings.resetToDefaults()}
-                className="rounded-3xl border border-white/20 px-5 py-2 text-sm text-white/80 transition hover:bg白/10"
-              >
-                清除密钥
-              </button>
             </div>
+            {isUserIconPickerOpen && (
+              <div className="max-h-48 overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-3">
+                <div className="grid grid-cols-5 gap-3 sm:grid-cols-6">
+                  {CONTACT_ICON_OPTIONS.map((icon) => (
+                    <button
+                      type="button"
+                      key={icon}
+                      onClick={() => {
+                        void settings.updateSettings({ userAvatarIcon: icon, userAvatarUrl: '' });
+                        setIsUserIconPickerOpen(false);
+                      }}
+                      className={`flex h-12 w-12 items-center justify-center rounded-2xl border transition ${
+                        resolvedUserAvatarIcon === icon && !trimmedUserAvatarUrl
+                          ? 'border-cyan-300 bg-cyan-300/20 text-cyan-200'
+                          : 'border-white/15 bg-white/10 text-white/80 hover:border-white/40 hover:bg-white/20'
+                      }`}
+                    >
+                      <svg aria-hidden="true" className="h-7 w-7">
+                        <use xlinkHref={`#${icon}`} />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <label className="block text-sm text-white/70">
+              姓名
+              <input
+                value={settings.userName}
+                onChange={(event) => void settings.updateSettings({ userName: event.target.value })}
+                placeholder="例如：小李"
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
+              />
+            </label>
+            <label className="block text-sm text-white/70">
+              头像图片地址
+              <input
+                value={settings.userAvatarUrl}
+                onChange={(event) =>
+                  void settings.updateSettings({ userAvatarUrl: event.target.value })
+                }
+                placeholder="https://example.com/me.png"
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
+              />
+              <span className="mt-1 block text-xs text-white/55">
+                如果填写图片地址，将优先显示图片；留空则使用图标与颜色。
+              </span>
+            </label>
+            <label className="block text-sm text-white/70">
+              个人设定
+              <textarea
+                value={settings.userPrompt}
+                onChange={(event) =>
+                  void settings.updateSettings({ userPrompt: event.target.value })
+                }
+                rows={4}
+                placeholder="描述你的身份、语气或希望 AI 了解的背景。"
+                className="mt-1 w-full rounded-3xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20"
+              />
+            </label>
           </div>
         </section>
 
+        {/* 系统提示词设置 */}
         <section className="rounded-3xl border border-white/10 bg-white/10 p-6 shadow-glass backdrop-blur-xl">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>

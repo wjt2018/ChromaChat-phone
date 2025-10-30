@@ -22,6 +22,8 @@ import {
   persistMessage,
   sendMessageToLLM,
   summarizeThreadLongMemory,
+  deleteMessageById,
+  updateMessageContent,
   TOKEN_LIMIT_STEP,
   updateContact
 } from '../../services/chatService';
@@ -908,14 +910,45 @@ const MessageBubble = ({
   message,
   contact,
   userProfile,
-  shouldAnimate = false
+  shouldAnimate = false,
+  onRequestActions
 }: {
   message: Message;
   contact?: Contact;
   userProfile: UserProfile;
   shouldAnimate?: boolean;
+  onRequestActions?: (message: Message) => void;
 }) => {
   const isSelf = message.role === 'user';
+  const longPressRef = useRef<number | null>(null);
+
+  const triggerActions = useCallback(() => {
+    if (onRequestActions) {
+      onRequestActions(message);
+    }
+  }, [message, onRequestActions]);
+
+  const clearLongPress = useCallback(() => {
+    if (longPressRef.current !== null) {
+      window.clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
+  }, []);
+
+  const handleTouchStart = useCallback(() => {
+    if (!onRequestActions) {
+      return;
+    }
+    clearLongPress();
+    longPressRef.current = window.setTimeout(() => {
+      triggerActions();
+      clearLongPress();
+    }, 600);
+  }, [clearLongPress, onRequestActions, triggerActions]);
+
+  const handleTouchEnd = useCallback(() => {
+    clearLongPress();
+  }, [clearLongPress]);
 
   const bubble = (
     <div
@@ -938,9 +971,19 @@ const MessageBubble = ({
   return (
     <div className={`flex ${isSelf ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`flex items-end gap-2 sm:gap-3 ${
+        className={`relative flex items-end gap-2 sm:gap-3 ${
           shouldAnimate ? 'message-appear' : ''
         }`}
+        onContextMenu={(event) => {
+          if (onRequestActions) {
+            event.preventDefault();
+            triggerActions();
+          }
+        }}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
       >
         {isSelf ? (
           <>
@@ -953,6 +996,19 @@ const MessageBubble = ({
             {bubble}
           </>
         )}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            triggerActions();
+          }}
+          className={`absolute hidden h-7 w-7 items-center justify-center rounded-full bg-white/20 text-white transition hover:bg-white/40 sm:flex ${
+            isSelf ? '-left-3 -bottom-3' : '-right-3 -bottom-3'
+          }`}
+          aria-label="消息操作"
+        >
+          ⋯
+        </button>
       </div>
     </div>
   );
@@ -981,6 +1037,15 @@ const ChatApp = () => {
   const [animatingKeys, setAnimatingKeys] = useState<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
   const animationTimeoutsRef = useRef<Record<string, number>>({});
+  const [messageActionTarget, setMessageActionTarget] = useState<Message | null>(null);
+
+  const openMessageActions = useCallback((message: Message) => {
+    setMessageActionTarget(message);
+  }, []);
+
+  const closeMessageActions = useCallback(() => {
+    setMessageActionTarget(null);
+  }, []);
 
   const clearRevealTimeout = useCallback(() => {
     if (revealTimeoutRef.current !== null) {
@@ -1302,7 +1367,7 @@ const ChatApp = () => {
     }
   };
 
-const requestAssistantReply = async () => {
+  const requestAssistantReply = async () => {
     if (!activeThread || !contactId) {
       return;
     }
@@ -1359,6 +1424,95 @@ const requestAssistantReply = async () => {
       setIsSending(false);
     }
   };
+
+  const handleDeleteMessage = useCallback(
+    async (message: Message) => {
+      if (!message.id) {
+        closeMessageActions();
+        setError('无法删除暂存消息。');
+        return;
+      }
+      try {
+        await deleteMessageById(message.id);
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : '删除消息失败，请稍后重试。';
+        setError(messageText);
+      } finally {
+        closeMessageActions();
+      }
+    },
+    [closeMessageActions]
+  );
+
+  const handleEditMessage = useCallback(
+    async (message: Message) => {
+      if (!message.id) {
+        closeMessageActions();
+        setError('无法编辑暂存消息。');
+        return;
+      }
+      const nextContent = window.prompt('修改消息内容', message.content);
+      if (nextContent === null) {
+        return;
+      }
+      const trimmed = nextContent.trim();
+      if (trimmed.length === 0) {
+        setError('编辑后的内容不能为空。');
+        return;
+      }
+      try {
+        await updateMessageContent({ messageId: message.id, content: trimmed });
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : '修改消息失败，请稍后重试。';
+        setError(messageText);
+      } finally {
+        closeMessageActions();
+      }
+    },
+    [closeMessageActions]
+  );
+
+  const handleRegenerateMessage = useCallback(
+    async (message: Message) => {
+      if (!activeThread || message.role !== 'assistant') {
+        closeMessageActions();
+        setError('仅支持对 AI 回复重新生成。');
+        return;
+      }
+      if (!messages) {
+        closeMessageActions();
+        return;
+      }
+      const targetIndex = messages.findIndex((item) => item.id === message.id);
+      if (targetIndex === -1) {
+        closeMessageActions();
+        return;
+      }
+      try {
+        const toDeleteIds: number[] = [];
+        for (let index = targetIndex; index < messages.length; index += 1) {
+          const item = messages[index];
+          if (item.role !== 'assistant') {
+            break;
+          }
+          if (typeof item.id === 'number') {
+            toDeleteIds.push(item.id);
+          }
+        }
+        await Promise.all(toDeleteIds.map((id) => deleteMessageById(id)));
+        await requestAssistantReply();
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : '重新生成失败，请稍后再试。';
+        setError(messageText);
+      } finally {
+        closeMessageActions();
+      }
+    },
+    [activeThread, closeMessageActions, messages, requestAssistantReply]
+  );
 
   const handleSendMessage = async ({ requestReply }: { requestReply: boolean }) => {
     if (!activeThread || !contactId) {
@@ -1522,6 +1676,7 @@ const requestAssistantReply = async () => {
                     contact={activeContact}
                     userProfile={userProfile}
                     shouldAnimate={animatingKeySet.has(messageKey)}
+                    onRequestActions={openMessageActions}
                   />
                 );
               })
@@ -1538,11 +1693,11 @@ const requestAssistantReply = async () => {
                 {error}
               </div>
             ) : null}
-            <div className="flex flex-wrap items-end gap-3 sm:flex-nowrap">
+            <div className="flex items-end gap-3">
               <button
                 type="button"
                 onClick={() => setShowMoreOptions((prev) => !prev)}
-                className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
+                className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
                 aria-label={showMoreOptions ? '收起更多功能' : '展开更多功能'}
               >
                 <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -1554,10 +1709,10 @@ const requestAssistantReply = async () => {
                 value={inputValue}
                 onChange={handleInputChange}
                 rows={1}
-                className="min-h-[38px] min-w-[240px] flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60"
+                className="min-h-[38px] min-w-0 flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60 sm:min-w-[240px]"
                 disabled={!activeThread || isSending}
               />
-              <div className="flex flex-wrap gap-2 sm:flex-nowrap">
+              <div className="flex shrink-0 items-center gap-2">
                 <button
                   title="发送消息但不请求回复"
                   type="button"
@@ -1648,6 +1803,53 @@ const requestAssistantReply = async () => {
           </footer>
         </section>
       </div>
+
+      {messageActionTarget ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6 pt-10 sm:items-center sm:pb-0"
+          onClick={closeMessageActions}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl bg-slate-900 p-4 text-white shadow-2xl sm:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="mb-3 line-clamp-3 rounded-2xl bg-white/5 px-3 py-2 text-xs text-white/70">
+              {messageActionTarget.content}
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25"
+                onClick={() => handleEditMessage(messageActionTarget)}
+              >
+                编辑这条消息
+              </button>
+              <button
+                type="button"
+                className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25 disabled:opacity-50"
+                onClick={() => handleRegenerateMessage(messageActionTarget)}
+                disabled={messageActionTarget.role !== 'assistant'}
+              >
+                重新生成本轮回复
+              </button>
+              <button
+                type="button"
+                className="rounded-2xl bg-red-500/20 px-4 py-2 text-sm font-medium text-red-100 transition hover:bg-red-500/30"
+                onClick={() => handleDeleteMessage(messageActionTarget)}
+              >
+                删除这条消息
+              </button>
+            </div>
+            <button
+              type="button"
+              className="mt-4 w-full rounded-2xl border border-white/10 px-4 py-2 text-sm font-medium text-white/70 transition hover:bg-white/10"
+              onClick={closeMessageActions}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {showDialog ? (
         <NewContactForm

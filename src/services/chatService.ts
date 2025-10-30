@@ -390,3 +390,31 @@ export const persistMessage = async ({
     createdAt: Date.now()
   });
 };
+
+export const deleteMessageById = async (messageId: number) => {
+  const message = await db.messages.get(messageId);
+  if (!message) {
+    return;
+  }
+  await db.transaction('rw', db.messages, db.threads, async () => {
+    await db.messages.delete(messageId);
+    await db.threads.update(message.threadId, { updatedAt: Date.now() });
+  });
+};
+
+export const updateMessageContent = async ({
+  messageId,
+  content
+}: {
+  messageId: number;
+  content: string;
+}) => {
+  const message = await db.messages.get(messageId);
+  if (!message) {
+    return;
+  }
+  await db.transaction('rw', db.messages, db.threads, async () => {
+    await db.messages.update(messageId, { content });
+    await db.threads.update(message.threadId, { updatedAt: Date.now() });
+  });
+};
