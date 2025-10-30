@@ -1179,13 +1179,14 @@ const ChatApp = () => {
       triggerBubbleAnimation(key);
       index += 1;
       if (index < queue.length) {
-        revealTimeoutRef.current = window.setTimeout(revealNext, 280);
+        // 调整消息弹出时间间隔
+        revealTimeoutRef.current = window.setTimeout(revealNext, 1000);
       } else {
         revealTimeoutRef.current = null;
       }
     };
-
-    revealTimeoutRef.current = window.setTimeout(revealNext, 120);
+    // 调整消息弹出时间间隔
+    revealTimeoutRef.current = window.setTimeout(revealNext, 1000);
 
     return () => {
       clearRevealTimeout();
