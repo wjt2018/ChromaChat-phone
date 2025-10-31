@@ -8,10 +8,11 @@ import './index.css';
 import { registerSW } from './pwa/serviceWorkerRegistration';
 
 const queryClient = new QueryClient();
+const basename = (import.meta.env.BASE_URL || '').replace(/\/$/, '');
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <QueryClientProvider client={queryClient}>
         <App />
       </QueryClientProvider>
