@@ -1,5 +1,6 @@
 import {
   ChangeEvent,
+  CSSProperties,
   FormEvent,
   SVGProps,
   useCallback,
@@ -24,6 +25,7 @@ import {
   summarizeThreadLongMemory,
   deleteMessageById,
   updateMessageContent,
+  AUTO_REPLY_DELAY_OPTIONS,
   TOKEN_LIMIT_STEP,
   updateContact
 } from '../../services/chatService';
@@ -236,6 +238,17 @@ type UserProfile = {
   avatarUrl?: string;
 };
 
+type AutoReplyDelayOption = (typeof AUTO_REPLY_DELAY_OPTIONS)[number];
+
+const DEFAULT_AUTO_REPLY_DELAY = AUTO_REPLY_DELAY_OPTIONS[1];
+
+const normalizeAutoReplyDelayOption = (value?: number): AutoReplyDelayOption => {
+  if (typeof value === 'number' && AUTO_REPLY_DELAY_OPTIONS.includes(value as AutoReplyDelayOption)) {
+    return value as AutoReplyDelayOption;
+  }
+  return DEFAULT_AUTO_REPLY_DELAY;
+};
+
 const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: ContactSidebarProps) => (
   <aside className="hidden h-full w-80 flex-none flex-col gap-4 border-r border-white/10 bg-white/5 p-6 shadow-inner shadow-black/10 backdrop-blur-xl sm:flex lg:w-96">
     <div className="flex items-center justify-between">
@@ -346,6 +359,8 @@ type ContactDetailsModalProps = {
     selfAvatarUrl?: string;
     selfPrompt?: string;
     tokenLimit: number;
+    autoReplyEnabled: boolean;
+    autoReplyDelayMinutes?: number;
   }) => Promise<void>;
   onDelete: () => Promise<void>;
 };
@@ -384,6 +399,20 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
   const [tokenLimitInput, setTokenLimitInput] = useState(() =>
     snapToTokenStep(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT)
   );
+  const [autoReplyEnabled, setAutoReplyEnabled] = useState(contact.autoReplyEnabled ?? false);
+  const [autoReplyDelay, setAutoReplyDelay] = useState<AutoReplyDelayOption>(() =>
+    normalizeAutoReplyDelayOption(contact.autoReplyDelayMinutes)
+  );
+  const autoReplyOptionStyle: CSSProperties = { color: '#0f172a', backgroundColor: '#f8fafc' };
+  const formatDelayLabel = useCallback((minutes: number) => {
+    if (minutes === 1440) {
+      return '24 小时';
+    }
+    if (minutes >= 60 && minutes % 60 === 0) {
+      return `${minutes / 60} 小时`;
+    }
+    return `${minutes} 分钟`;
+  }, []);
   const trimmedAvatarUrl = avatarUrl.trim();
   const resolvedAvatarIcon = trimmedAvatarUrl ? '' : (avatarIcon || contact.avatarIcon || '');
   const trimmedSelfAvatarUrl = selfAvatarUrl.trim();
@@ -392,17 +421,74 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
   const effectiveSelfAvatarColor = isSelfAvatarColorCustom
     ? selfAvatarColor
     : globalUserSettings.userAvatarColor || '#0ea5e9';
-  const handleResetSelfSettings = () => {
+  const previewSelfProfile = useMemo<UserProfile>(() => {
+    const localName = selfName.trim();
+    const globalName = globalUserSettings.userName?.trim();
+    const displayName = localName.length > 0 ? localName : globalName?.length ? globalName : '我';
+
+    const previewAvatarUrl = trimmedSelfAvatarUrl || globalUserAvatarUrl || undefined;
+    const localIcon = selfAvatarIcon ? (selfAvatarIcon as ContactIconName) : undefined;
+    const globalIcon = globalUserSettings.userAvatarIcon || undefined;
+    let previewIcon: string | undefined;
+
+    if (trimmedSelfAvatarUrl) {
+      previewIcon = undefined;
+    } else if (localIcon) {
+      previewIcon = localIcon;
+    } else if (globalUserAvatarUrl) {
+      previewIcon = undefined;
+    } else if (globalIcon) {
+      previewIcon = globalIcon;
+    }
+
+    return {
+      name: displayName,
+      avatarColor: effectiveSelfAvatarColor,
+      avatarUrl: previewAvatarUrl,
+      avatarIcon: previewIcon
+    };
+  }, [
+    selfName,
+    trimmedSelfAvatarUrl,
+    globalUserSettings.userName,
+    globalUserSettings.userAvatarIcon,
+    globalUserAvatarUrl,
+    selfAvatarIcon,
+    effectiveSelfAvatarColor
+  ]);
+  const handleResetSelfSettings = useCallback(() => {
     setSelfName('');
     setSelfPrompt('');
     setSelfAvatarUrl('');
     setSelfAvatarIcon('');
     setSelfAvatarColor(globalUserSettings.userAvatarColor || '#0ea5e9');
     setIsSelfAvatarColorCustom(false);
-  };
+    setIsSelfIconPickerOpen(false);
+  }, [globalUserSettings.userAvatarColor]);
+  const handleClearSelfAvatar = useCallback(() => {
+    setSelfAvatarIcon('');
+    setSelfAvatarUrl('');
+    setIsSelfIconPickerOpen(false);
+  }, []);
+  const confirmResetSelfSettings = useCallback(() => {
+    const confirmed = window.confirm('确认使用全局设置覆盖当前对话的个人信息吗？');
+    if (confirmed) {
+      handleResetSelfSettings();
+    }
+  }, [handleResetSelfSettings]);
+  const confirmClearSelfAvatar = useCallback(() => {
+    const confirmed = window.confirm('确认清除自定义头像并恢复为全局设置吗？');
+    if (confirmed) {
+      handleClearSelfAvatar();
+    }
+  }, [handleClearSelfAvatar]);
   useEffect(() => {
     setTokenLimitInput(snapToTokenStep(contact.tokenLimit ?? DEFAULT_TOKEN_LIMIT));
   }, [contact.id, contact.tokenLimit]);
+  useEffect(() => {
+    setAutoReplyEnabled(contact.autoReplyEnabled ?? false);
+    setAutoReplyDelay(normalizeAutoReplyDelayOption(contact.autoReplyDelayMinutes));
+  }, [contact.autoReplyDelayMinutes, contact.autoReplyEnabled, contact.id]);
   const resolvedTokenLimit = useMemo(
     () => snapToTokenStep(tokenLimitInput),
     [tokenLimitInput]
@@ -420,7 +506,9 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
     avatarIcon: resolvedAvatarIcon || undefined,
     avatarUrl: trimmedAvatarUrl || undefined,
     prompt,
-    worldBook
+    worldBook,
+    autoReplyEnabled,
+    autoReplyDelayMinutes: autoReplyEnabled ? autoReplyDelay : undefined
   } as Contact;
 
   const handleSubmit = async (event: FormEvent) => {
@@ -443,7 +531,9 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
         selfAvatarUrl: trimmedSelfUrl,
         selfAvatarIcon: selfAvatarIcon || undefined,
         selfAvatarColor: isSelfAvatarColorCustom ? selfAvatarColor : undefined,
-        tokenLimit: resolvedTokenLimit
+        tokenLimit: resolvedTokenLimit,
+        autoReplyEnabled,
+        autoReplyDelayMinutes: autoReplyEnabled ? autoReplyDelay : undefined
       });
       onClose();
     } catch (err) {
@@ -628,17 +718,24 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
         </label>
 
         <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-white">我的信息（仅当前对话）</h3>
             <button
               type="button"
-              onClick={handleResetSelfSettings}
+              onClick={confirmResetSelfSettings}
               className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
             >
               使用全局
             </button>
           </div>
           <p className="text-xs text-white/55">留空将使用“设置”页面中的全局个人信息。</p>
+          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3">
+            <UserAvatar profile={previewSelfProfile} size="h-14 w-14" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-white">{previewSelfProfile.name}</p>
+              <p className="mt-0.5 text-xs text-white/60">你的消息在对话中会以此头像展示。</p>
+            </div>
+          </div>
 
           <label className="block text-xs text-white/70 sm:text-sm">
             我的姓名
@@ -666,17 +763,16 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
               <span className="text-xs text-white/70 sm:text-sm">自定义头像</span>
               <button
                 type="button"
-                onClick={() => setIsSelfIconPickerOpen((prev) => !prev)}
+                onClick={() => {
+                  setIsSelfIconPickerOpen((prev) => !prev);
+                }}
                 className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
               >
                 选择图标
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setSelfAvatarIcon('');
-                  setSelfAvatarUrl('');
-                }}
+                onClick={confirmClearSelfAvatar}
                 className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/20"
               >
                 清除图标
@@ -710,7 +806,9 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
             )}
             <input
               value={selfAvatarUrl}
-              onChange={(event) => setSelfAvatarUrl(event.target.value)}
+              onChange={(event) => {
+                setSelfAvatarUrl(event.target.value);
+              }}
               placeholder={globalUserAvatarUrl ? `全局图片：${globalUserAvatarUrl}` : '留空以使用全局头像'}
               className="w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
             />
@@ -736,6 +834,52 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
               </button>
             </div>
           </div>
+        </section>
+
+        <section className="space-y-3 rounded-3xl border border-white/10 bg-white/5 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-white">自动回复</p>
+              <p className="text-xs text-white/60">开启后，将在设定的时间后自动回复此联系人。</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoReplyEnabled}
+              onClick={() => setAutoReplyEnabled((prev) => !prev)}
+              className={`flex h-6 w-11 items-center rounded-full px-[2px] transition ${
+                autoReplyEnabled ? 'bg-cyan-400/90 justify-end' : 'bg-white/30 justify-start'
+              }`}
+            >
+              <span className="h-5 w-5 rounded-full bg-white" />
+            </button>
+          </div>
+          {autoReplyEnabled ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-white/60">延迟</span>
+              <div className="relative w-36">
+                <select
+                  value={autoReplyDelay}
+                  onChange={(event) =>
+                    setAutoReplyDelay(normalizeAutoReplyDelayOption(Number(event.target.value)))
+                  }
+                  className="w-full appearance-none rounded-2xl border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-medium text-white shadow-inner shadow-white/10 outline-none transition focus:border-cyan-200/60 focus:bg-white/20 focus:shadow-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {AUTO_REPLY_DELAY_OPTIONS.map((minutes) => (
+                    <option key={minutes} value={minutes} style={autoReplyOptionStyle}>
+                      {formatDelayLabel(minutes)}
+                    </option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-white/70">
+                  ▼
+                </div>
+              </div>
+              <span className="text-xs text-white/60">后触发自动回复</span>
+            </div>
+          ) : (
+            <p className="text-xs text-white/60">关闭后，该联系人不会自动回复。</p>
+          )}
         </section>
 
         {error ? <p className="rounded-2xl bg-red-500/20 px-4 py-2 text-xs text-red-200">{error}</p> : null}
@@ -1037,6 +1181,7 @@ const ChatApp = () => {
   const [animatingKeys, setAnimatingKeys] = useState<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
   const animationTimeoutsRef = useRef<Record<string, number>>({});
+  const autoReplyTimerRef = useRef<number | null>(null);
   const [messageActionTarget, setMessageActionTarget] = useState<Message | null>(null);
 
   const openMessageActions = useCallback((message: Message) => {
@@ -1051,6 +1196,13 @@ const ChatApp = () => {
     if (revealTimeoutRef.current !== null) {
       window.clearTimeout(revealTimeoutRef.current);
       revealTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearAutoReplyTimer = useCallback(() => {
+    if (autoReplyTimerRef.current !== null) {
+      window.clearTimeout(autoReplyTimerRef.current);
+      autoReplyTimerRef.current = null;
     }
   }, []);
 
@@ -1075,12 +1227,13 @@ const ChatApp = () => {
   useEffect(() => {
     return () => {
       clearRevealTimeout();
+      clearAutoReplyTimer();
       Object.values(animationTimeoutsRef.current).forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
       });
       animationTimeoutsRef.current = {};
     };
-  }, [clearRevealTimeout]);
+  }, [clearRevealTimeout, clearAutoReplyTimer]);
 
   useEffect(() => {
     if (!settings.isLoaded) {
@@ -1113,6 +1266,7 @@ const ChatApp = () => {
     }
     return threads.find((thread) => thread.contactId === contactId);
   }, [threads, contactId]);
+  const activeThreadId = activeThread?.id;
 
   const messages = useLiveQuery<Message[]>(
     () =>
@@ -1220,23 +1374,22 @@ const ChatApp = () => {
     });
   }, [activeThread?.id, visibleMessages.length]);
 
-  const pendingUserMessages = useMemo(() => {
+  const latestPendingUserKey = useMemo(() => {
     if (!messages || messages.length === 0) {
-      return [];
+      return null;
     }
 
-    const stack: string[] = [];
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
       if (message.role === 'assistant') {
-        break;
+        return null;
       }
       if (message.role === 'user') {
-        stack.unshift(message.content);
+        return getMessageKey(message);
       }
     }
 
-    return stack;
+    return null;
   }, [messages]);
 
   const tokenStats = useMemo(() => {
@@ -1318,7 +1471,7 @@ const ChatApp = () => {
     settings.userAvatarUrl,
     settings.userName
   ]);
-  const hasPendingUserMessages = pendingUserMessages.length > 0;
+  const hasPendingUserMessages = Boolean(latestPendingUserKey);
   const trimmedInputValue = inputValue.trim();
   const hasApiKey = settings.apiKey.trim().length > 0;
   const canSummarizeLongMemory =
@@ -1368,12 +1521,14 @@ const ChatApp = () => {
     }
   };
 
-  const requestAssistantReply = async () => {
-    if (!activeThread || !contactId) {
+  const requestAssistantReply = useCallback(async () => {
+    clearAutoReplyTimer();
+
+    if (!activeThreadId || !contactId) {
       return;
     }
 
-    const threadMessages = await db.messages.where({ threadId: activeThread.id }).sortBy('createdAt');
+    const threadMessages = await db.messages.where({ threadId: activeThreadId }).sortBy('createdAt');
     let hasPendingUserMessage = false;
     for (let index = threadMessages.length - 1; index >= 0; index -= 1) {
       const message = threadMessages[index];
@@ -1400,7 +1555,7 @@ const ChatApp = () => {
     setError(null);
 
     try {
-      const response = await sendMessageToLLM({ threadId: activeThread.id });
+      const response = await sendMessageToLLM({ threadId: activeThreadId });
       const segments = splitAssistantResponse(response);
       const parts = segments.length > 0 ? segments : [response.trim()];
 
@@ -1410,7 +1565,7 @@ const ChatApp = () => {
           continue;
         }
         await persistMessage({
-          threadId: activeThread.id,
+          threadId: activeThreadId,
           role: 'assistant',
           content: trimmed
         });
@@ -1424,7 +1579,43 @@ const ChatApp = () => {
     } finally {
       setIsSending(false);
     }
-  };
+  }, [activeThreadId, contactId, settings.apiKey, clearAutoReplyTimer]);
+
+  useEffect(() => {
+    clearAutoReplyTimer();
+
+    if (!activeContact || !activeContact.autoReplyEnabled) {
+      return;
+    }
+
+    if (!activeThreadId || !latestPendingUserKey) {
+      return;
+    }
+
+    if (!hasApiKey || isSending) {
+      return;
+    }
+
+    const delayMinutes = normalizeAutoReplyDelayOption(activeContact.autoReplyDelayMinutes);
+    autoReplyTimerRef.current = window.setTimeout(() => {
+      autoReplyTimerRef.current = null;
+      void requestAssistantReply();
+    }, delayMinutes * 60 * 1000);
+
+    return () => {
+      clearAutoReplyTimer();
+    };
+  }, [
+    activeContact?.id,
+    activeContact?.autoReplyEnabled,
+    activeContact?.autoReplyDelayMinutes,
+    activeThreadId,
+    latestPendingUserKey,
+    hasApiKey,
+    isSending,
+    clearAutoReplyTimer,
+    requestAssistantReply
+  ]);
 
   const handleDeleteMessage = useCallback(
     async (message: Message) => {
@@ -1573,6 +1764,8 @@ const ChatApp = () => {
     selfAvatarUrl?: string;
     selfPrompt?: string;
     tokenLimit: number;
+    autoReplyEnabled: boolean;
+    autoReplyDelayMinutes?: number;
   }) => {
     if (!contactId) {
       return;

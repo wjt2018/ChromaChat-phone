@@ -179,7 +179,7 @@ const DesktopView = () => {
       <div className="absolute inset-0" style={wallpaperStyle} aria-hidden="true" />
       <div className="absolute inset-0 bg-slate-950/45" aria-hidden="true" />
       <div className="relative z-10 flex flex-1 flex-col">
-        <div className="mb-8 flex items-center justify-between rounded-full bg-white/85 px-4 py-1 text-[11px] font-semibold text-slate-900 shadow-md shadow-black/20 backdrop-blur-lg">
+        <div className="mb-8 flex items-center justify-between bg-white/55 px-4 py-1 text-[11px] font-semibold text-slate-900 shadow-md shadow-black/20">
           <span className="text-sm font-semibold">{time}</span>
           <div className="flex items-center gap-3">
             <div className="flex items-end gap-[2px]">

@@ -14,6 +14,8 @@ export const TOKEN_LIMIT_STEP = 500;
 export const MIN_TOKEN_LIMIT = 500;
 const MESSAGE_TOKEN_OVERHEAD = 4;
 const SYSTEM_TOKEN_OVERHEAD = 12;
+export const AUTO_REPLY_DELAY_OPTIONS = [10, 30, 60, 120, 300, 720, 1440] as const;
+type AutoReplyDelay = (typeof AUTO_REPLY_DELAY_OPTIONS)[number];
 
 const sanitizeText = (value: string | undefined | null) => value?.trim() ?? '';
 
@@ -188,6 +190,8 @@ export const updateContact = async (
       | 'selfPrompt'
       | 'longMemory'
       | 'tokenLimit'
+      | 'autoReplyEnabled'
+      | 'autoReplyDelayMinutes'
     >
   >
 ) => {
@@ -224,6 +228,20 @@ export const updateContact = async (
   if (typeof nextUpdates.longMemory === 'string') {
     const trimmed = nextUpdates.longMemory.trim();
     nextUpdates.longMemory = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if ('autoReplyEnabled' in nextUpdates) {
+    nextUpdates.autoReplyEnabled = Boolean(nextUpdates.autoReplyEnabled);
+  }
+
+  if ('autoReplyDelayMinutes' in nextUpdates) {
+    const rawValue = Number(nextUpdates.autoReplyDelayMinutes);
+    const allowed = AUTO_REPLY_DELAY_OPTIONS.includes(rawValue as AutoReplyDelay);
+    nextUpdates.autoReplyDelayMinutes = allowed ? rawValue : AUTO_REPLY_DELAY_OPTIONS[1];
+  }
+
+  if (nextUpdates.autoReplyEnabled === false) {
+    nextUpdates.autoReplyDelayMinutes = undefined;
   }
 
   if ('tokenLimit' in nextUpdates) {

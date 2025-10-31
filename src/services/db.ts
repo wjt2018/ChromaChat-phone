@@ -17,6 +17,8 @@ export interface Contact {
   selfAvatarUrl?: string;
   selfPrompt?: string;
   tokenLimit?: number;
+  autoReplyEnabled?: boolean;
+  autoReplyDelayMinutes?: number;
   createdAt: number;
 }
 
