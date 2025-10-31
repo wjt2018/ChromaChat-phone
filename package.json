@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
+    "postbuild": "node scripts/postbuild.mjs",
     "preview": "vite preview --host",
     "lint": "eslint src --ext ts,tsx"
   },
