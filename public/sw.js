@@ -1,18 +1,17 @@
-const CACHE_NAME = 'chromachat-cache-v1';
-const OFFLINE_URL = '/';
+const CACHE_NAME = 'chromachat-cache-v2';
+const OFFLINE_URL = './';
+const PRECACHE_URLS = [
+  './',
+  './manifest.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-192.png',
+  './icons/icon-maskable-512.png'
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) =>
-        cache.addAll([
-          OFFLINE_URL,
-          '/manifest.webmanifest',
-          '/icons/icon-192.png',
-          '/icons/icon-512.png'
-        ])
-      )
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
   self.skipWaiting();
 });
@@ -33,7 +32,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  const isSameOrigin = new URL(request.url).origin === self.location.origin;
+  const requestUrl = new URL(request.url);
+  const isSameOrigin = requestUrl.origin === self.location.origin;
 
   event.respondWith(
     (async () => {
@@ -46,7 +46,7 @@ self.addEventListener('fetch', (event) => {
         }
 
         return networkResponse;
-      } catch (error) {
+      } catch {
         const cachedResponse = await caches.match(request);
         if (cachedResponse) {
           return cachedResponse;
@@ -59,7 +59,7 @@ self.addEventListener('fetch', (event) => {
           }
         }
 
-        return new Response('离线状态，资源不可用', {
+        return new Response('Offline - resource unavailable', {
           status: 503,
           statusText: 'Offline',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' }
