@@ -89,6 +89,11 @@ type ContactSidebarProps = {
   onCreate: () => void;
 };
 
+type MessageActionTarget = {
+  message: Message;
+  canRegenerate: boolean;
+};
+
 const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: ContactSidebarProps) => (
   <aside className="hidden h-full w-80 flex-none flex-col gap-4 border-r border-white/10 bg-white/5 p-6 shadow-inner shadow-black/10 backdrop-blur-xl sm:flex lg:w-96">
     <div className="flex items-center justify-between">
@@ -455,11 +460,7 @@ const ChatApp = () => {
   const revealTimeoutRef = useRef<number | null>(null);
   const animationTimeoutsRef = useRef<Record<string, number>>({});
   const autoReplyTimerRef = useRef<number | null>(null);
-  const [messageActionTarget, setMessageActionTarget] = useState<Message | null>(null);
-
-  const openMessageActions = useCallback((message: Message) => {
-    setMessageActionTarget(message);
-  }, []);
+  const [messageActionTarget, setMessageActionTarget] = useState<MessageActionTarget | null>(null);
 
   const closeMessageActions = useCallback(() => {
     setMessageActionTarget(null);
@@ -548,6 +549,56 @@ const ChatApp = () => {
         : Promise.resolve<Message[]>([]),
     [activeThread?.id, contactId]
   );
+
+  const latestAssistantData = useMemo(() => {
+    if (!messages || messages.length === 0) {
+      return {
+        keys: new Set<string>(),
+        range: null as { start: number; end: number } | null
+      };
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.role !== 'assistant') {
+      return {
+        keys: new Set<string>(),
+        range: null
+      };
+    }
+
+    let lastIndex = messages.length - 1;
+    let firstAssistantIndex = lastIndex;
+    for (let index = lastIndex; index >= 0; index -= 1) {
+      const item = messages[index];
+      if (item.role === 'user') {
+        break;
+      }
+      if (item.role === 'assistant') {
+        firstAssistantIndex = index;
+      }
+    }
+
+    const keys = new Set<string>();
+    for (let index = firstAssistantIndex; index <= lastIndex; index += 1) {
+      keys.add(getMessageKey(messages[index]));
+    }
+
+    return {
+      keys,
+      range: { start: firstAssistantIndex, end: lastIndex }
+    };
+  }, [messages]);
+
+  const openMessageActions = useCallback(
+    (message: Message) => {
+      const key = getMessageKey(message);
+      const canRegenerate =
+        message.role === 'assistant' && latestAssistantData.keys.has(key);
+      setMessageActionTarget({ message, canRegenerate });
+    },
+    [latestAssistantData]
+  );
+
 
   const activeContact = contacts?.find((contact) => contact.id === contactId);
 
@@ -950,6 +1001,21 @@ const ChatApp = () => {
         closeMessageActions();
         return;
       }
+      const messageKey = getMessageKey(message);
+      const canRegenerate = latestAssistantData.keys.has(messageKey);
+      if (!canRegenerate) {
+        closeMessageActions();
+        setError('仅可重新生成最近一次 AI 回复。');
+        return;
+      }
+
+      const range = latestAssistantData.range;
+      if (!range) {
+        closeMessageActions();
+        setError('未找到对应的用户消息，无法重新生成。');
+        return;
+      }
+
       const targetIndex = messages.findIndex((item) => item.id === message.id);
       if (targetIndex === -1) {
         closeMessageActions();
@@ -957,15 +1023,13 @@ const ChatApp = () => {
       }
       try {
         const toDeleteIds: number[] = [];
-        for (let index = targetIndex; index < messages.length; index += 1) {
+        for (let index = range.start; index < messages.length; index += 1) {
           const item = messages[index];
-          if (item.role !== 'assistant') {
-            break;
-          }
           if (typeof item.id === 'number') {
             toDeleteIds.push(item.id);
           }
         }
+
         await Promise.all(toDeleteIds.map((id) => deleteMessageById(id)));
         await requestAssistantReply();
       } catch (err) {
@@ -976,7 +1040,7 @@ const ChatApp = () => {
         closeMessageActions();
       }
     },
-    [activeThread, closeMessageActions, messages, requestAssistantReply]
+    [activeThread, closeMessageActions, latestAssistantData, messages, requestAssistantReply]
   );
 
   const handleSendMessage = async ({ requestReply }: { requestReply: boolean }) => {
@@ -1281,28 +1345,28 @@ const ChatApp = () => {
             onClick={(event) => event.stopPropagation()}
           >
             <p className="mb-3 line-clamp-3 rounded-2xl bg-white/5 px-3 py-2 text-xs text-white/70">
-              {messageActionTarget.content}
+              {messageActionTarget.message.content}
             </p>
             <div className="flex flex-col gap-2">
               <button
                 type="button"
                 className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25"
-                onClick={() => handleEditMessage(messageActionTarget)}
+                onClick={() => handleEditMessage(messageActionTarget.message)}
               >
                 编辑这条消息
               </button>
               <button
                 type="button"
-                className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25 disabled:opacity-50"
-                onClick={() => handleRegenerateMessage(messageActionTarget)}
-                disabled={messageActionTarget.role !== 'assistant'}
+                className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => handleRegenerateMessage(messageActionTarget.message)}
+                disabled={!messageActionTarget.canRegenerate}
               >
                 重新生成本轮回复
               </button>
               <button
                 type="button"
                 className="rounded-2xl bg-red-500/20 px-4 py-2 text-sm font-medium text-red-100 transition hover:bg-red-500/30"
-                onClick={() => handleDeleteMessage(messageActionTarget)}
+                onClick={() => handleDeleteMessage(messageActionTarget.message)}
               >
                 删除这条消息
               </button>

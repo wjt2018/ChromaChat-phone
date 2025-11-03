@@ -4,7 +4,7 @@ import { getSetting, setSetting, settingsKeys } from '../services/db';
 
 const DEFAULT_SYSTEM_PROMPT = `你是一位真实、有温度的手机助理。
 与用户对话时请根据“角色信息”调整语言风格，保持共情和好奇。
-当信息不足时先询问澄清；当用户需要帮助时给出清晰的步骤。`;
+当信息不足时先询问澄清；当用户需要帮助时给出清晰的步骤。每轮对话生成1至7句话。`;
 
 interface SettingsState {
   baseUrl: string;
