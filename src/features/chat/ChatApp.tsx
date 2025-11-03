@@ -92,6 +92,14 @@ type ContactSidebarProps = {
 type MessageActionTarget = {
   message: Message;
   canRegenerate: boolean;
+  anchor?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    isSelf: boolean;
+    viewportWidth: number;
+  };
 };
 
 const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: ContactSidebarProps) => (
@@ -339,16 +347,39 @@ const MessageBubble = ({
   contact?: Contact;
   userProfile: UserProfile;
   shouldAnimate?: boolean;
-  onRequestActions?: (message: Message) => void;
+  onRequestActions?: (
+    message: Message,
+    anchor?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      isSelf: boolean;
+      viewportWidth: number;
+    }
+  ) => void;
 }) => {
   const isSelf = message.role === 'user';
   const longPressRef = useRef<number | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   const triggerActions = useCallback(() => {
     if (onRequestActions) {
-      onRequestActions(message);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        onRequestActions(message, {
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+          isSelf,
+          viewportWidth: window.innerWidth
+        });
+      } else {
+        onRequestActions(message);
+      }
     }
-  }, [message, onRequestActions]);
+  }, [isSelf, message, onRequestActions]);
 
   const clearLongPress = useCallback(() => {
     if (longPressRef.current !== null) {
@@ -393,9 +424,10 @@ const MessageBubble = ({
   return (
     <div className={`flex ${isSelf ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`relative flex items-end gap-2 sm:gap-3 ${
+      className={`relative flex items-end gap-2 sm:gap-3 ${
           shouldAnimate ? 'message-appear' : ''
         }`}
+        ref={containerRef}
         onContextMenu={(event) => {
           if (onRequestActions) {
             event.preventDefault();
@@ -590,11 +622,21 @@ const ChatApp = () => {
   }, [messages]);
 
   const openMessageActions = useCallback(
-    (message: Message) => {
+    (
+      message: Message,
+      anchor?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        isSelf: boolean;
+        viewportWidth: number;
+      }
+    ) => {
       const key = getMessageKey(message);
       const canRegenerate =
         message.role === 'assistant' && latestAssistantData.keys.has(key);
-      setMessageActionTarget({ message, canRegenerate });
+      setMessageActionTarget({ message, canRegenerate, anchor });
     },
     [latestAssistantData]
   );
@@ -1335,59 +1377,137 @@ const ChatApp = () => {
         </section>
       </div>
 
-      {messageActionTarget ? (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6 pt-10 sm:items-center sm:pb-0"
-          onClick={closeMessageActions}
-        >
-          <div
-            className="w-full max-w-sm rounded-3xl bg-slate-900 p-4 text-white shadow-2xl sm:rounded-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <p className="mb-3 line-clamp-3 rounded-2xl bg-white/5 px-3 py-2 text-xs text-white/70">
-              {messageActionTarget.message.content}
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25"
-                onClick={() => handleEditMessage(messageActionTarget.message)}
-              >
-                编辑这条消息
-              </button>
-              <button
-                type="button"
-                className="rounded-2xl bg-white/15 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/25 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => handleRegenerateMessage(messageActionTarget.message)}
-                disabled={!messageActionTarget.canRegenerate}
-              >
-                重新生成本轮回复
-              </button>
-              <button
-                type="button"
-                className="rounded-2xl bg-red-500/20 px-4 py-2 text-sm font-medium text-red-100 transition hover:bg-red-500/30"
-                onClick={() => handleDeleteMessage(messageActionTarget.message)}
-              >
-                删除这条消息
-              </button>
-            </div>
-            <button
-              type="button"
-              className="mt-4 w-full rounded-2xl border border-white/10 px-4 py-2 text-sm font-medium text-white/70 transition hover:bg-white/10"
-              onClick={closeMessageActions}
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      ) : null}
+      {messageActionTarget
+        ? (() => {
+            const actions = [
+              {
+                key: 'edit',
+                label: '编辑',
+                icon: '#icon-pen',
+                onClick: () => handleEditMessage(messageActionTarget.message),
+                disabled: false
+              },
+              {
+                key: 'regenerate',
+                label: '重生成',
+                icon: '#icon-refresh',
+                onClick: () => handleRegenerateMessage(messageActionTarget.message),
+                disabled: !messageActionTarget.canRegenerate
+              },
+              {
+                key: 'delete',
+                label: '删除',
+                icon: '#icon-delete',
+                onClick: () => handleDeleteMessage(messageActionTarget.message),
+                disabled: false
+              }
+            ];
 
-      {showDialog ? (
-        <NewContactForm
-          onSubmit={handleCreateContact}
-          onClose={() => setShowDialog(false)}
-        />
-      ) : null}
+            const renderActionButton = (
+              action: (typeof actions)[number],
+              variant: 'bubble' | 'modal'
+            ) => (
+              <button
+                key={action.key}
+                type="button"
+                onClick={action.onClick}
+                disabled={action.disabled}
+                className={
+                  variant === 'bubble'
+                    ? 'flex w-16 flex-col items-center gap-1 rounded-xl bg-white/8 text-xs font-medium text-white transition hover:bg-white/16 disabled:cursor-not-allowed disabled:opacity-40'
+                    : 'flex w-full items-center gap-3 rounded-2xl bg-white/12 text-sm font-medium text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40'
+                }
+                style={{gap: 0}}
+              >
+                <span
+                  className={
+                    variant === 'bubble'
+                      ? 'flex h-8 w-8 items-center justify-center rounded-full bg-white/12'
+                      : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/12'
+                  }
+                >
+                  <svg
+                    aria-hidden="true"
+                    className={variant === 'bubble' ? 'h-4 w-4' : 'h-5 w-5'}
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                  >
+                    <use xlinkHref={action.icon} />
+                  </svg>
+                </span>
+                <span className={variant === 'bubble' ? 'text-[11px]' : 'text-sm'}>{action.label}</span>
+              </button>
+            );
+
+            const anchor = messageActionTarget.anchor;
+            if (anchor) {
+              const centerX = anchor.x + anchor.width / 2;
+              const halfWidth = Math.max(72, Math.min(130, anchor.viewportWidth / 2 - 16));
+              const clampedX = Math.min(anchor.viewportWidth - halfWidth, Math.max(halfWidth, centerX));
+              const top = Math.max(84, anchor.y - 12);
+              return (
+                <div className="fixed inset-0 z-50">
+                  <button
+                    type="button"
+                    className="absolute inset-0 h-full w-full cursor-default bg-transparent"
+                    onClick={closeMessageActions}
+                  />
+                  <div
+                    className="absolute z-10 flex flex-col items-center gap-[2px]"
+                    style={{ left: clampedX, top, transform: 'translate(-50%, calc(-100% - -7px))', gap: '0px' }}
+                  >
+                    <div
+                      style={{ paddingTop: 0 }}
+                      className="max-w-[260px] rounded-2xl border border-white/15 bg-slate-950/90 px-3 py-2 text-white shadow-xl backdrop-blur-md"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div className="flex items-center gap-3">
+                        {actions.map((action) => renderActionButton(action, 'bubble'))}
+                      </div>
+                    </div>
+                    <div
+                      className="pointer-events-none"
+                      style={{
+                        width: 0,
+                        height: 0,
+                        borderLeft: '9px solid transparent',
+                        borderRight: '9px solid transparent',
+                        borderTop: '10px solid rgb(2 6 23 / 0.9)',
+                        marginTop: -2
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 px-4 pb-6 pt-10 sm:items-center sm:pb-0"
+                onClick={closeMessageActions}
+              >
+                <div
+                  className="w-full max-w-sm rounded-3xl bg-slate-900 p-4 text-white shadow-2xl sm:rounded-2xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <p className="mb-3 line-clamp-3 rounded-2xl bg-white/5 px-3 py-2 text-xs text-white/70">
+                    {messageActionTarget.message.content}
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    {actions.map((action) => renderActionButton(action, 'modal'))}
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-4 w-full rounded-2xl border border-white/10 px-4 py-2 text-sm font-medium text-white/70 transition hover:bg-white/10"
+                    onClick={closeMessageActions}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            );
+          })()
+        : null}
 
       {isDetailsOpen && activeContact ? (
         <ContactDetailsModal
