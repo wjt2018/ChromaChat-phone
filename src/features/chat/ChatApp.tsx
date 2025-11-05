@@ -66,6 +66,88 @@ const splitAssistantResponse = (content: string): string[] => {
   return sentences;
 };
 
+const BUILTIN_EMOJIS = [
+  '😀',
+  '😁',
+  '😂',
+  '🤣',
+  '😊',
+  '😍',
+  '😎',
+  '🤩',
+  '😘',
+  '😚',
+  '🤔',
+  '🤨',
+  '😏',
+  '😴',
+  '😪',
+  '😷',
+  '🤒',
+  '🥳',
+  '😇',
+  '🙃',
+  '🙂',
+  '🙄',
+  '😭',
+  '😤',
+  '😡',
+  '😱',
+  '😰',
+  '🥺',
+  '😅',
+  '😆',
+  '😉',
+  '👍',
+  '👎',
+  '🙏',
+  '👏',
+  '🤝',
+  '👀',
+  '💪',
+  '❤️',
+  '💔',
+  '✨',
+  '🔥',
+  '🌟',
+  '🎉',
+  '🎁',
+  '⚡'
+] as const;
+
+const CUSTOM_STICKERS = [
+  { label: '炸毛', url: 'https://files.catbox.moe/5nt4hn.gif' },
+  { label: '睡觉了', url: 'https://files.catbox.moe/40wadn.gif' },
+  { label: '盯', url: 'https://files.catbox.moe/09ei7v.gif' },
+  { label: '喜欢喜欢', url: 'https://files.catbox.moe/skruy1.gif' },
+  { label: '等消息', url: 'https://files.catbox.moe/xqir51.gif' },
+  { label: '烦', url: 'https://files.catbox.moe/82ssnv.gif' },
+  { label: '什么！', url: 'https://files.catbox.moe/6ivzg4.gif' },
+  { label: '打拳击', url: 'https://files.catbox.moe/mcfpai.gif' },
+  { label: '不要', url: 'https://files.catbox.moe/pl6pwv.gif' },
+  { label: '我在听', url: 'https://files.catbox.moe/het22s.gif' },
+  { label: '烦死了', url: 'https://files.catbox.moe/1rr529.png' },
+  { label: '凶', url: 'https://files.catbox.moe/un0lvt.gif' },
+  { label: '记仇', url: 'https://files.catbox.moe/o08aqf.gif' },
+  { label: '我要吃', url: 'https://files.catbox.moe/kz6fai.gif' },
+  { label: '在干嘛', url: 'https://files.catbox.moe/dmdd6n.gif' },
+  { label: '脏脏狗', url: 'https://files.catbox.moe/erowpn.gif' },
+  { label: '生气', url: 'https://files.catbox.moe/rm2qce.gif' },
+  { label: '瞪你', url: 'https://files.catbox.moe/likwfd.jpeg' },
+  { label: '好狗狗', url: 'https://files.catbox.moe/tldwp6.gif' },
+  { label: '我来啦', url: 'https://files.catbox.moe/c0xqim.gif' },
+  { label: '全速前进', url: 'https://files.catbox.moe/szxq3l.gif' },
+  { label: '难受想哭', url: 'https://files.catbox.moe/ttwzow.gif' },
+  { label: '蹭蹭', url: 'https://files.catbox.moe/rfvwjr.gif' },
+  { label: '按摩', url: 'https://files.catbox.moe/79q9ii.gif' },
+  { label: 'OK', url: 'https://files.catbox.moe/m1kqxc.gif' },
+  { label: '喜欢你', url: 'https://files.catbox.moe/ifh56z.gif' },
+  { label: '流口水', url: 'https://files.catbox.moe/clh3v0.gif' },
+  { label: '捏捏你', url: 'https://files.catbox.moe/zhk5wy.gif' },
+  { label: '等信息', url: 'https://files.catbox.moe/sih3br.gif' },
+  { label: '这不对吧', url: 'https://files.catbox.moe/s8l7s6.jpeg' }
+] as const;
+
 const SettingsIcon = ({ className = 'h-5 w-5', ...props }: SVGProps<SVGSVGElement>) => (
   <svg
     viewBox="0 0 24 24"
@@ -489,6 +571,8 @@ const ChatApp = () => {
   const [showDialog, setShowDialog] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [showMoreOptions, setShowMoreOptions] = useState(false);
+  const [moreOptionsView, setMoreOptionsView] = useState<'default' | 'emoji'>('default');
+  const [emojiActiveTab, setEmojiActiveTab] = useState<'builtin' | 'custom'>('builtin');
 
   const settings = useSettingsStore();
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -551,6 +635,19 @@ const ChatApp = () => {
       autoReplyTimerRef.current = null;
     }
   }, []);
+
+  const focusTextarea = useCallback(() => {
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!showMoreOptions) {
+      setMoreOptionsView('default');
+      setEmojiActiveTab('builtin');
+    }
+  }, [showMoreOptions]);
 
   const triggerBubbleAnimation = useCallback((key: string) => {
     setAnimatingKeys((prev) => {
@@ -1485,46 +1582,147 @@ const ChatApp = () => {
               </div>
             </div>
             {showMoreOptions ? (
-              <div className="flex flex-wrap gap-3 rounded-3xl border border-white/15 bg-white/5 px-4 py-3 text-white/80">
-                <button
-                  type="button"
-                  onClick={handleSummarizeLongMemory}
-                  disabled={!canSummarizeLongMemory || isSummarizing}
-                  className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
-                  title="总结前文，生成长期记忆"
-                >
-                  {isSummarizing ? (
-                    <svg
-                      className="h-4 w-4 animate-spin text-white"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      aria-hidden="true"
+              <div className="rounded-3xl border border-white/15 bg-white/5 px-4 py-3 text-white/80">
+                {moreOptionsView === 'default' ? (
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={handleSummarizeLongMemory}
+                      disabled={!canSummarizeLongMemory || isSummarizing}
+                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
+                      title="总结前文，生成长期记忆"
                     >
-                      <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path
-                        className="opacity-90"
-                        d="M4 12a8 8 0 0 1 8-8"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                  ) : (
-                    <span className="font-medium text-white">总结</span>
-                  )}
-                  <span className="sr-only">总结前文</span>
-                </button>
-                {['功能 B', '功能 C'].map((label) => (
-                  <button
-                    key={label}
-                    type="button"
-                    className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
-                    title={label}
-                    disabled
-                  >
-                    {label}
-                  </button>
-                ))}
+                      {isSummarizing ? (
+                        <svg
+                          className="h-4 w-4 animate-spin text-white"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          aria-hidden="true"
+                        >
+                          <circle className="opacity-30" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path
+                            className="opacity-90"
+                            d="M4 12a8 8 0 0 1 8-8"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      ) : (
+                        <svg aria-hidden="true" className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
+                          <use xlinkHref="#icon-sparkles" />
+                        </svg>
+                      )}
+                      <span className="font-medium text-white">总结</span>
+                      <span className="sr-only">总结前文</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMoreOptionsView('emoji');
+                        setEmojiActiveTab('builtin');
+                      }}
+                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
+                      title="表情"
+                    >
+                      <svg aria-hidden="true" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                        <use xlinkHref="#icon-emoji" />
+                      </svg>
+                      <span className="sr-only">表情</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs text-white/50 transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      title="功能 C"
+                    >
+                      功能 C
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex rounded-full bg-white/10 p-1 text-xs text-white/70">
+                        <button
+                          type="button"
+                          onClick={() => setEmojiActiveTab('builtin')}
+                          className={`rounded-full px-3 py-1 transition ${
+                            emojiActiveTab === 'builtin' ? 'bg-white/25 text-white' : 'text-white/70'
+                          }`}
+                        >
+                          默认表情
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEmojiActiveTab('custom')}
+                          className={`rounded-full px-3 py-1 transition ${
+                            emojiActiveTab === 'custom' ? 'bg-white/25 text-white' : 'text-white/70'
+                          }`}
+                        >
+                          自定义
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMoreOptionsView('default')}
+                        className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/10"
+                      >
+                        返回
+                      </button>
+                    </div>
+                    {emojiActiveTab === 'builtin' ? (
+                      <div className="max-h-48 overflow-y-auto rounded-2xl border border-white/10 bg-white/10 p-2">
+                        <div className="grid grid-cols-8 gap-1 text-xl">
+                          {BUILTIN_EMOJIS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => {
+                                setInputValue((prev) => `${prev}${emoji}`);
+                                focusTextarea();
+                                setShowMoreOptions(false);
+                              }}
+                              className="flex h-10 w-10 items-center justify-center rounded-xl transition hover:bg-white/20"
+                            >
+                              <span>{emoji}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="max-h-52 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-white/10 p-2">
+                        {CUSTOM_STICKERS.map((sticker) => {
+                          const snippet = `![${sticker.label}](${sticker.url})`;
+                          return (
+                            <button
+                              key={sticker.url}
+                              type="button"
+                              onClick={() => {
+                                setInputValue((prev) => {
+                                  const prefix = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
+                                  return `${prev}${prefix}${snippet}`;
+                                });
+                                focusTextarea();
+                                setShowMoreOptions(false);
+                              }}
+                              className="flex w-full items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm transition hover:border-white/30 hover:bg-white/10"
+                            >
+                              <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl bg-white/15">
+                                <img
+                                  src={sticker.url}
+                                  alt={sticker.label}
+                                  className="h-12 w-12 object-cover"
+                                  loading="lazy"
+                                />
+                              </div>
+                              <div className="flex-1 truncate text-white/90">{sticker.label}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : null}
               </>
