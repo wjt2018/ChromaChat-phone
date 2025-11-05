@@ -341,7 +341,9 @@ const MessageBubble = ({
   contact,
   userProfile,
   shouldAnimate = false,
-  onRequestActions
+  onRequestActions,
+  selectionMode = false,
+  selected = false
 }: {
   message: Message;
   contact?: Contact;
@@ -358,6 +360,8 @@ const MessageBubble = ({
       viewportWidth: number;
     }
   ) => void;
+  selectionMode?: boolean;
+  selected?: boolean;
 }) => {
   const isSelf = message.role === 'user';
   const longPressRef = useRef<number | null>(null);
@@ -405,11 +409,11 @@ const MessageBubble = ({
 
   const bubble = (
     <div
-      className={`max-w-xs rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-lg sm:max-w-sm ${
+      className={`max-w-xs rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-lg transition sm:max-w-sm ${
         isSelf
           ? 'bg-cyan-400/85 text-slate-900 shadow-cyan-500/40 backdrop-blur-md'
           : 'bg-white/15 text-white shadow-white/10 backdrop-blur-md'
-      }`}
+      } ${selectionMode && selected ? 'ring-2 ring-cyan-300/70 ring-offset-2 ring-offset-slate-950/40' : ''}`}
     >
       {message.content}
     </div>
@@ -422,9 +426,9 @@ const MessageBubble = ({
   );
 
   return (
-    <div className={`flex ${isSelf ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex w-full ${isSelf ? 'justify-end' : 'justify-start'}`}>
       <div
-      className={`relative flex items-end gap-2 sm:gap-3 ${
+        className={`relative flex items-end gap-2 sm:gap-3 ${
           shouldAnimate ? 'message-appear' : ''
         }`}
         ref={containerRef}
@@ -450,19 +454,21 @@ const MessageBubble = ({
             {bubble}
           </>
         )}
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            triggerActions();
-          }}
-          className={`absolute hidden h-7 w-7 items-center justify-center rounded-full bg-white/20 text-white transition hover:bg-white/40 sm:flex ${
-            isSelf ? '-left-3 -bottom-3' : '-right-3 -bottom-3'
-          }`}
-          aria-label="消息操作"
-        >
-          ⋯
-        </button>
+        {!selectionMode ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              triggerActions();
+            }}
+            className={`absolute hidden h-7 w-7 items-center justify-center rounded-full bg-white/20 text-white transition hover:bg-white/40 sm:flex ${
+              isSelf ? '-left-3 -bottom-3' : '-right-3 -bottom-3'
+            }`}
+            aria-label="消息操作"
+          >
+            ...
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -493,10 +499,44 @@ const ChatApp = () => {
   const animationTimeoutsRef = useRef<Record<string, number>>({});
   const autoReplyTimerRef = useRef<number | null>(null);
   const [messageActionTarget, setMessageActionTarget] = useState<MessageActionTarget | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedMessageKeys, setSelectedMessageKeys] = useState<string[]>([]);
+  const selectedMessageKeySet = useMemo(() => new Set(selectedMessageKeys), [selectedMessageKeys]);
 
   const closeMessageActions = useCallback(() => {
     setMessageActionTarget(null);
   }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setIsSelectionMode(false);
+    setSelectedMessageKeys([]);
+  }, []);
+
+  const toggleMessageSelection = useCallback((message: Message) => {
+    const key = getMessageKey(message);
+    setSelectedMessageKeys((prev) => {
+      if (prev.includes(key)) {
+        return prev.filter((item) => item !== key);
+      }
+      return [...prev, key];
+    });
+  }, []);
+
+  const handleStartMultiSelect = useCallback(
+    (message: Message) => {
+      const key = getMessageKey(message);
+      setIsSelectionMode(true);
+      setSelectedMessageKeys((prev) => {
+        if (prev.includes(key)) {
+          return prev;
+        }
+        return [...prev, key];
+      });
+      setShowMoreOptions(false);
+      closeMessageActions();
+    },
+    [closeMessageActions]
+  );
 
   const clearRevealTimeout = useCallback(() => {
     if (revealTimeoutRef.current !== null) {
@@ -564,7 +604,8 @@ const ChatApp = () => {
 
   useEffect(() => {
     setShowMoreOptions(false);
-  }, [contactId]);
+    exitSelectionMode();
+  }, [contactId, exitSelectionMode]);
 
   const activeThread = useMemo(() => {
     if (!threads || !contactId) {
@@ -581,6 +622,26 @@ const ChatApp = () => {
         : Promise.resolve<Message[]>([]),
     [activeThread?.id, contactId]
   );
+
+  useEffect(() => {
+    if (!messages) {
+      return;
+    }
+    setSelectedMessageKeys((prev) => {
+      if (prev.length === 0) {
+        return prev;
+      }
+      const allowed = new Set(messages.map(getMessageKey));
+      const filtered = prev.filter((key) => allowed.has(key));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [messages]);
+
+  useEffect(() => {
+    if (isSelectionMode && selectedMessageKeys.length === 0) {
+      exitSelectionMode();
+    }
+  }, [exitSelectionMode, isSelectionMode, selectedMessageKeys.length]);
 
   const latestAssistantData = useMemo(() => {
     if (!messages || messages.length === 0) {
@@ -1003,6 +1064,35 @@ const ChatApp = () => {
     [closeMessageActions]
   );
 
+  const handleBulkDeleteSelectedMessages = useCallback(async () => {
+    if (!messages || selectedMessageKeys.length === 0) {
+      exitSelectionMode();
+      return;
+    }
+
+    const keySet = new Set(selectedMessageKeys);
+    const targets = messages.filter(
+      (item): item is Message & { id: number } =>
+        keySet.has(getMessageKey(item)) && typeof item.id === 'number'
+    );
+
+    if (targets.length === 0) {
+      setError('选择的消息无法删除。');
+      exitSelectionMode();
+      return;
+    }
+
+    try {
+      await Promise.all(targets.map((item) => deleteMessageById(item.id)));
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : '批量删除失败，请稍后重试。';
+      setError(messageText);
+    } finally {
+      exitSelectionMode();
+    }
+  }, [exitSelectionMode, messages, selectedMessageKeys]);
+
+
   const handleEditMessage = useCallback(
     async (message: Message) => {
       if (!message.id) {
@@ -1242,15 +1332,54 @@ const ChatApp = () => {
             {visibleMessages.length > 0 ? (
               visibleMessages.map((message) => {
                 const messageKey = getMessageKey(message);
+                const isSelected = selectedMessageKeySet.has(messageKey);
                 return (
-                  <MessageBubble
+                  <div
                     key={messageKey}
-                    message={message}
-                    contact={activeContact}
-                    userProfile={userProfile}
-                    shouldAnimate={animatingKeySet.has(messageKey)}
-                    onRequestActions={openMessageActions}
-                  />
+                    className={`flex w-full items-stretch ${isSelectionMode ? 'gap-3 py-1 sm:gap-4' : ''}`}
+                    onClick={() => {
+                      if (isSelectionMode) {
+                        toggleMessageSelection(message);
+                      }
+                    }}
+                  >
+                    {isSelectionMode ? (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleMessageSelection(message);
+                        }}
+                        className="flex w-10 shrink-0 items-start justify-center pt-2 sm:w-12"
+                        role="checkbox"
+                        aria-checked={isSelected}
+                        style={{alignItems: 'center'}}
+                      >
+                        <span
+                          className={`flex h-5 w-5 items-center justify-center rounded-full border-[3px] transition ${
+                            isSelected ? 'border-cyan-300 bg-cyan-300' : 'border-white/50 bg-transparent'
+                          }`}
+                        >
+                          <span
+                            className={`h-2.5 w-2.5 rounded-full bg-slate-900 transition ${
+                              isSelected ? 'opacity-100 scale-100' : 'scale-50 opacity-0'
+                            }`}
+                          />
+                        </span>
+                      </button>
+                    ) : null}
+                    <div className="flex flex-1">
+                      <MessageBubble
+                        message={message}
+                        contact={activeContact}
+                        userProfile={userProfile}
+                        shouldAnimate={animatingKeySet.has(messageKey)}
+                        onRequestActions={isSelectionMode ? undefined : openMessageActions}
+                        selectionMode={isSelectionMode}
+                        selected={isSelected}
+                      />
+                    </div>
+                  </div>
                 );
               })
             ) : (
@@ -1266,6 +1395,31 @@ const ChatApp = () => {
                 {error}
               </div>
             ) : null}
+            {isSelectionMode ? (
+              <div className="flex flex-col gap-3">
+                <div className="rounded-3xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white/80">
+                  已选择 <span className="font-semibold text-white">{selectedMessageKeys.length}</span> 条消息
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteSelectedMessages}
+                    disabled={selectedMessageKeys.length === 0}
+                    className="w-full rounded-2xl bg-red-500/80 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-red-500/40"
+                  >
+                    删除
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exitSelectionMode}
+                    className="w-full rounded-2xl border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="flex items-end gap-3">
               <button
                 type="button"
@@ -1373,6 +1527,8 @@ const ChatApp = () => {
                 ))}
               </div>
             ) : null}
+              </>
+            )}
           </footer>
         </section>
       </div>
@@ -1393,6 +1549,13 @@ const ChatApp = () => {
                 icon: '#icon-refresh',
                 onClick: () => handleRegenerateMessage(messageActionTarget.message),
                 disabled: !messageActionTarget.canRegenerate
+              },
+              {
+                key: 'multi-select',
+                label: '多选',
+                icon: '#icon-duoxuan',
+                onClick: () => handleStartMultiSelect(messageActionTarget.message),
+                disabled: messageActionTarget.message.id === undefined
               },
               {
                 key: 'delete',
