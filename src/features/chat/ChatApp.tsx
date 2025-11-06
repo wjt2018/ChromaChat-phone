@@ -577,6 +577,7 @@ const ChatApp = () => {
   const settings = useSettingsStore();
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
   const [visibleMessageKeys, setVisibleMessageKeys] = useState<string[]>([]);
   const [animatingKeys, setAnimatingKeys] = useState<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
@@ -636,18 +637,54 @@ const ChatApp = () => {
     }
   }, []);
 
+  const syncTextareaHeight = useCallback((textarea: HTMLTextAreaElement | null) => {
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    const minHeight = 38;
+    const nextHeight = Math.max(textarea.scrollHeight, minHeight);
+    textarea.style.height = `${nextHeight}px`;
+  }, []);
+
+  const updateSelectionRef = useCallback(
+    (target?: HTMLTextAreaElement | null) => {
+      const node = target ?? textareaRef.current;
+      if (!node) {
+        return;
+      }
+      const start = node.selectionStart ?? node.value.length;
+      const end = node.selectionEnd ?? node.value.length;
+      selectionRef.current = { start, end };
+    },
+    []
+  );
+
   const focusTextarea = useCallback(() => {
     requestAnimationFrame(() => {
-      textareaRef.current?.focus();
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        return;
+      }
+      textarea.focus();
+      const { start, end } = selectionRef.current;
+      try {
+        textarea.setSelectionRange(start, end);
+      } catch (error) {
+        // Ignore errors in environments that do not support setSelectionRange
+      }
+      syncTextareaHeight(textarea);
     });
-  }, []);
+  }, [syncTextareaHeight]);
 
   useEffect(() => {
     if (!showMoreOptions) {
       setMoreOptionsView('default');
       setEmojiActiveTab('builtin');
+    } else {
+      focusTextarea();
     }
-  }, [showMoreOptions]);
+  }, [showMoreOptions, focusTextarea]);
 
   const triggerBubbleAnimation = useCallback((key: string) => {
     setAnimatingKeys((prev) => {
@@ -1001,24 +1038,64 @@ const ChatApp = () => {
   const canSummarizeLongMemory =
     Boolean(activeThread && messages && messages.length > 0 && hasApiKey);
 
-  const syncTextareaHeight = (textarea: HTMLTextAreaElement | null) => {
-    if (!textarea) {
-      return;
-    }
-    textarea.style.height = 'auto';
-    const minHeight = 38;
-    const nextHeight = Math.max(textarea.scrollHeight, minHeight);
-    textarea.style.height = `${nextHeight}px`;
-  };
 
   useEffect(() => {
     syncTextareaHeight(textareaRef.current);
-  }, [inputValue]);
+  }, [inputValue, syncTextareaHeight]);
+
+  useEffect(() => {
+    updateSelectionRef(textareaRef.current);
+  }, [updateSelectionRef]);
 
   const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     syncTextareaHeight(event.currentTarget);
     setInputValue(event.currentTarget.value);
+    updateSelectionRef(event.currentTarget);
   };
+
+  const handleTextareaSelectionEvent = useCallback(
+    (event: { currentTarget: HTMLTextAreaElement }) => {
+      updateSelectionRef(event.currentTarget);
+    },
+    [updateSelectionRef]
+  );
+
+  const insertTextAtCursor = useCallback(
+    (text: string, options?: { prependNewLineIfNeeded?: boolean }) => {
+      const { prependNewLineIfNeeded = false } = options ?? {};
+      const textarea = textareaRef.current;
+      const domStart = textarea?.selectionStart ?? selectionRef.current.start;
+      const domEnd = textarea?.selectionEnd ?? selectionRef.current.end;
+      setInputValue((prev) => {
+        const length = prev.length;
+        const start = Math.max(0, Math.min(domStart, length));
+        const end = Math.max(0, Math.min(domEnd, length));
+        let insertion = text;
+        if (prependNewLineIfNeeded && start > 0 && prev[start - 1] !== '\n') {
+          insertion = `\n${insertion}`;
+        }
+        const nextValue = `${prev.slice(0, start)}${insertion}${prev.slice(end)}`;
+        const nextCaret = start + insertion.length;
+        selectionRef.current = { start: nextCaret, end: nextCaret };
+        requestAnimationFrame(() => {
+          const node = textareaRef.current;
+          if (!node) {
+            return;
+          }
+          node.focus();
+          try {
+            node.setSelectionRange(nextCaret, nextCaret);
+          } catch {
+            // ignore selection errors
+          }
+          syncTextareaHeight(node);
+          updateSelectionRef(node);
+        });
+        return nextValue;
+      });
+    },
+    [syncTextareaHeight, updateSelectionRef]
+  );
 
   const handleSelectContact = (id: string) => {
     navigate(`/apps/chat/${id}`);
@@ -1293,6 +1370,8 @@ const ChatApp = () => {
           content: trimmedInput
         });
         setInputValue('');
+        selectionRef.current = { start: 0, end: 0 };
+        syncTextareaHeight(textareaRef.current);
       }
 
       if (requestReply) {
@@ -1520,7 +1599,14 @@ const ChatApp = () => {
             <div className="flex items-end gap-3">
               <button
                 type="button"
-                onClick={() => setShowMoreOptions((prev) => !prev)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  updateSelectionRef(textareaRef.current);
+                }}
+                onClick={() => {
+                  setShowMoreOptions((prev) => !prev);
+                  focusTextarea();
+                }}
                 className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white/80 transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
                 aria-label={showMoreOptions ? '收起更多功能' : '展开更多功能'}
               >
@@ -1532,6 +1618,11 @@ const ChatApp = () => {
                 ref={textareaRef}
                 value={inputValue}
                 onChange={handleInputChange}
+                onSelect={handleTextareaSelectionEvent}
+                onKeyUp={handleTextareaSelectionEvent}
+                onClick={handleTextareaSelectionEvent}
+                onFocus={handleTextareaSelectionEvent}
+                onBlur={handleTextareaSelectionEvent}
                 rows={1}
                 className="min-h-[38px] min-w-0 flex-1 resize-none rounded-3xl border border-white/15 bg-white/10 px-4 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/20 disabled:opacity-60 sm:min-w-[240px]"
                 disabled={!activeThread || isSending}
@@ -1587,6 +1678,25 @@ const ChatApp = () => {
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        updateSelectionRef(textareaRef.current);
+                      }}
+                      onClick={() => {
+                        setMoreOptionsView('emoji');
+                        setEmojiActiveTab('builtin');
+                        focusTextarea();
+                      }}
+                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
+                      title="表情"
+                    >
+                      <svg aria-hidden="true" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                        <use xlinkHref="#icon-emoji" />
+                      </svg>
+                      <span className="sr-only">表情</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleSummarizeLongMemory}
                       disabled={!canSummarizeLongMemory || isSummarizing}
                       className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1609,26 +1719,11 @@ const ChatApp = () => {
                           />
                         </svg>
                       ) : (
-                        <svg aria-hidden="true" className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
-                          <use xlinkHref="#icon-sparkles" />
+                        <svg aria-hidden="true" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                          <use xlinkHref="#icon-huizong" />
                         </svg>
                       )}
-                      <span className="font-medium text-white">总结</span>
                       <span className="sr-only">总结前文</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMoreOptionsView('emoji');
-                        setEmojiActiveTab('builtin');
-                      }}
-                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40"
-                      title="表情"
-                    >
-                      <svg aria-hidden="true" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
-                        <use xlinkHref="#icon-emoji" />
-                      </svg>
-                      <span className="sr-only">表情</span>
                     </button>
                     <button
                       type="button"
@@ -1662,10 +1757,17 @@ const ChatApp = () => {
                           自定义
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setMoreOptionsView('default')}
-                        className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/10"
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        updateSelectionRef(textareaRef.current);
+                      }}
+                      onClick={() => {
+                        setMoreOptionsView('default');
+                        focusTextarea();
+                      }}
+                      className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/10"
                       >
                         返回
                       </button>
@@ -1677,8 +1779,10 @@ const ChatApp = () => {
                             <button
                               key={emoji}
                               type="button"
-                              onClick={() => {
-                                setInputValue((prev) => `${prev}${emoji}`);
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                insertTextAtCursor(emoji);
                                 focusTextarea();
                                 setShowMoreOptions(false);
                               }}
@@ -1690,28 +1794,28 @@ const ChatApp = () => {
                         </div>
                       </div>
                     ) : (
-                      <div className="max-h-52 space-y-2 overflow-y-auto rounded-2xl border border-white/10 bg-white/10 p-2">
+                      <div className="flex max-h-52 overflow-y-auto gap-3" style={{flexWrap: 'wrap'}}>
                         {CUSTOM_STICKERS.map((sticker) => {
                           const snippet = `![${sticker.label}](${sticker.url})`;
                           return (
                             <button
                               key={sticker.url}
                               type="button"
-                              onClick={() => {
-                                setInputValue((prev) => {
-                                  const prefix = prev.length > 0 && !prev.endsWith('\n') ? '\n' : '';
-                                  return `${prev}${prefix}${snippet}`;
-                                });
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                insertTextAtCursor(snippet, { prependNewLineIfNeeded: true });
                                 focusTextarea();
                                 setShowMoreOptions(false);
                               }}
-                              className="flex w-full items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm transition hover:border-white/30 hover:bg-white/10"
+                              className="flex items-center text-left text-sm transition"
+                              style={{flexDirection: 'column'}}
                             >
-                              <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl bg-white/15">
+                              <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/15">
                                 <img
                                   src={sticker.url}
                                   alt={sticker.label}
-                                  className="h-12 w-12 object-cover"
+                                  className="h-16 w-16 object-cover"
                                   loading="lazy"
                                 />
                               </div>
