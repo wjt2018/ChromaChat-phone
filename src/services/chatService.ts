@@ -2,6 +2,7 @@ import { db, Message, MessageRole, Thread, Contact } from './db';
 import { chatCompletion, ChatMessage } from './llmClient';
 import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
 import { ContactIconName, getRandomContactIcon } from '../constants/icons';
+import { CUSTOM_STICKERS } from '../constants/customStickers';
 import { estimateTextTokens } from './tokenEstimator';
 
 const generateId = () => crypto.randomUUID();
@@ -32,37 +33,47 @@ const resolveTokenLimit = (tokenLimit?: number) => {
 
 const buildSystemPromptContent = (contact: Contact, settings: PromptSettingsSnapshot) => {
   const baseSystemPrompt = sanitizeText(settings.systemPrompt) || defaultSystemPrompt;
-  const rolePrompt = sanitizeText(contact.prompt) || '未提供';
-  const worldBook = sanitizeText(contact.worldBook) || '未提供';
+  const rolePrompt = sanitizeText(contact.prompt) || 'Not provided';
+  const worldBook = sanitizeText(contact.worldBook) || 'Not provided';
   const longMemory = sanitizeText(contact.longMemory);
   const effectiveUserName =
     sanitizeText(contact.selfName) ||
     sanitizeText(settings.userName) ||
-    '用户';
+    'User';
   const effectiveUserPrompt =
     sanitizeText(contact.selfPrompt) ||
     sanitizeText(settings.userPrompt) ||
-    '未提供';
+    'Not provided';
 
   const sections = [
     baseSystemPrompt,
     '---',
-    '角色信息：',
-    `名称：${contact.name}`,
-    `设定：${rolePrompt}`,
-    `世界观：${worldBook}`
+    'Role Profile:',
+    `Name: ${contact.name}`,
+    `Persona: ${rolePrompt}`,
+    `Worldbook: ${worldBook}`
   ];
 
   if (longMemory) {
-    sections.push('', '长期记忆（结合下方信息时优先参考）：', longMemory);
+    sections.push('', 'Long-term memory (use with higher priority when relevant):', longMemory);
   }
 
   sections.push(
     '',
-    '用户信息：',
-    `名称：${effectiveUserName}`,
-    `设定：${effectiveUserPrompt}`
+    'User Profile:',
+    `Name: ${effectiveUserName}`,
+    `Persona: ${effectiveUserPrompt}`
   );
+
+  if (CUSTOM_STICKERS.length > 0) {
+    sections.push(
+      '',
+      'Custom sticker catalog (when a sticker expresses the tone better, reply with the corresponding Markdown and send only the sticker):'
+    );
+    CUSTOM_STICKERS.forEach((sticker) => {
+      sections.push(`- ${sticker.label}: ![${sticker.label}](${sticker.url})`);
+    });
+  }
 
   return sections.join('\n');
 };

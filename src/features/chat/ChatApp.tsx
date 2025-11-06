@@ -25,6 +25,7 @@ import {
 } from '../../services/chatService';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { CONTACT_ICON_OPTIONS, ContactIconName, getRandomContactIcon } from '../../constants/icons';
+import { CUSTOM_STICKERS } from '../../constants/customStickers';
 import ContactDetailsModal from './ContactDetailsModal';
 import { ContactAvatar, AssistantAvatar, UserAvatar, UserProfile } from './AvatarComponents';
 import {
@@ -115,38 +116,6 @@ const BUILTIN_EMOJIS = [
   '⚡'
 ] as const;
 
-const CUSTOM_STICKERS = [
-  { label: '炸毛', url: 'https://files.catbox.moe/5nt4hn.gif' },
-  { label: '睡觉了', url: 'https://files.catbox.moe/40wadn.gif' },
-  { label: '盯', url: 'https://files.catbox.moe/09ei7v.gif' },
-  { label: '喜欢喜欢', url: 'https://files.catbox.moe/skruy1.gif' },
-  { label: '等消息', url: 'https://files.catbox.moe/xqir51.gif' },
-  { label: '烦', url: 'https://files.catbox.moe/82ssnv.gif' },
-  { label: '什么！', url: 'https://files.catbox.moe/6ivzg4.gif' },
-  { label: '打拳击', url: 'https://files.catbox.moe/mcfpai.gif' },
-  { label: '不要', url: 'https://files.catbox.moe/pl6pwv.gif' },
-  { label: '我在听', url: 'https://files.catbox.moe/het22s.gif' },
-  { label: '烦死了', url: 'https://files.catbox.moe/1rr529.png' },
-  { label: '凶', url: 'https://files.catbox.moe/un0lvt.gif' },
-  { label: '记仇', url: 'https://files.catbox.moe/o08aqf.gif' },
-  { label: '我要吃', url: 'https://files.catbox.moe/kz6fai.gif' },
-  { label: '在干嘛', url: 'https://files.catbox.moe/dmdd6n.gif' },
-  { label: '脏脏狗', url: 'https://files.catbox.moe/erowpn.gif' },
-  { label: '生气', url: 'https://files.catbox.moe/rm2qce.gif' },
-  { label: '瞪你', url: 'https://files.catbox.moe/likwfd.jpeg' },
-  { label: '好狗狗', url: 'https://files.catbox.moe/tldwp6.gif' },
-  { label: '我来啦', url: 'https://files.catbox.moe/c0xqim.gif' },
-  { label: '全速前进', url: 'https://files.catbox.moe/szxq3l.gif' },
-  { label: '难受想哭', url: 'https://files.catbox.moe/ttwzow.gif' },
-  { label: '蹭蹭', url: 'https://files.catbox.moe/rfvwjr.gif' },
-  { label: '按摩', url: 'https://files.catbox.moe/79q9ii.gif' },
-  { label: 'OK', url: 'https://files.catbox.moe/m1kqxc.gif' },
-  { label: '喜欢你', url: 'https://files.catbox.moe/ifh56z.gif' },
-  { label: '流口水', url: 'https://files.catbox.moe/clh3v0.gif' },
-  { label: '捏捏你', url: 'https://files.catbox.moe/zhk5wy.gif' },
-  { label: '等信息', url: 'https://files.catbox.moe/sih3br.gif' },
-  { label: '这不对吧', url: 'https://files.catbox.moe/s8l7s6.jpeg' }
-] as const;
 
 const SettingsIcon = ({ className = 'h-5 w-5', ...props }: SVGProps<SVGSVGElement>) => (
   <svg
@@ -490,10 +459,10 @@ const MessageBubble = ({
   }, [clearLongPress]);
 
   const trimmedContent = message.content.trim();
-  const stickerMatch = trimmedContent.match(/^!\[(.*?)\]\((https?:\/\/[^\s)]+)\)$/i);
-  const isSticker = Boolean(stickerMatch);
-  const stickerAlt = stickerMatch?.[1]?.trim() || '自定义表情';
-  const stickerUrl = stickerMatch?.[2] ?? '';
+  const stickerRegex = /!\[(.*?)\]\((https?:\/\/[^\s)]+)\)/gi;
+  const stickerMatches = Array.from(trimmedContent.matchAll(stickerRegex));
+  const hasStickers = stickerMatches.length > 0;
+  const textWithoutStickers = trimmedContent.replace(stickerRegex, '').trim();
 
   const bubble = (
     <div
@@ -502,17 +471,31 @@ const MessageBubble = ({
           ? 'bg-cyan-400/85 text-slate-900 shadow-cyan-500/40 backdrop-blur-md'
           : 'bg-white/15 text-white shadow-white/10 backdrop-blur-md'
       } ${selectionMode && selected ? 'ring-2 ring-cyan-300/70 ring-offset-2 ring-offset-slate-950/40' : ''} ${
-        isSticker ? 'p-2 sm:p-3 text-center' : ''
+        hasStickers ? 'p-2 sm:p-3 text-center' : ''
       }`}
     >
-      {isSticker ? (
-        <img
-          src={stickerUrl}
-          alt={stickerAlt}
-          className="mx-auto max-h-28 max-w-full rounded-2xl object-contain"
-          loading="lazy"
-          draggable={false}
-        />
+      {hasStickers ? (
+        <div className="flex flex-col items-center gap-2">
+          {stickerMatches.map((match, index) => {
+            const [, altRaw, url] = match;
+            const alt = altRaw?.trim() || `sticker-${index + 1}`;
+            return (
+              <img
+                key={`${url}-${index}`}
+                src={url}
+                alt={alt}
+                className="max-h-28 max-w-full rounded-2xl object-contain"
+                loading="lazy"
+                draggable={false}
+              />
+            );
+          })}
+          {textWithoutStickers.length > 0 ? (
+            <span className="block whitespace-pre-wrap break-words text-xs text-white/80">
+              {textWithoutStickers}
+            </span>
+          ) : null}
+        </div>
       ) : (
         message.content
       )}
