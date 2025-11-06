@@ -489,15 +489,33 @@ const MessageBubble = ({
     clearLongPress();
   }, [clearLongPress]);
 
+  const trimmedContent = message.content.trim();
+  const stickerMatch = trimmedContent.match(/^!\[(.*?)\]\((https?:\/\/[^\s)]+)\)$/i);
+  const isSticker = Boolean(stickerMatch);
+  const stickerAlt = stickerMatch?.[1]?.trim() || '自定义表情';
+  const stickerUrl = stickerMatch?.[2] ?? '';
+
   const bubble = (
     <div
       className={`max-w-xs rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-lg transition sm:max-w-sm ${
         isSelf
           ? 'bg-cyan-400/85 text-slate-900 shadow-cyan-500/40 backdrop-blur-md'
           : 'bg-white/15 text-white shadow-white/10 backdrop-blur-md'
-      } ${selectionMode && selected ? 'ring-2 ring-cyan-300/70 ring-offset-2 ring-offset-slate-950/40' : ''}`}
+      } ${selectionMode && selected ? 'ring-2 ring-cyan-300/70 ring-offset-2 ring-offset-slate-950/40' : ''} ${
+        isSticker ? 'p-2 sm:p-3 text-center' : ''
+      }`}
     >
-      {message.content}
+      {isSticker ? (
+        <img
+          src={stickerUrl}
+          alt={stickerAlt}
+          className="mx-auto max-h-28 max-w-full rounded-2xl object-contain"
+          loading="lazy"
+          draggable={false}
+        />
+      ) : (
+        message.content
+      )}
     </div>
   );
 
@@ -1266,6 +1284,33 @@ const ChatApp = () => {
     }
   }, [exitSelectionMode, messages, selectedMessageKeys]);
 
+  const handleSendCustomSticker = useCallback(
+    async (stickerMarkdown: string) => {
+      if (!activeThread || !contactId) {
+        setError('请选择会话后再发送贴纸。');
+        return false;
+      }
+      if (stickerMarkdown.trim().length === 0) {
+        return false;
+      }
+      setError(null);
+      try {
+        await persistMessage({
+          threadId: activeThread.id,
+          role: 'user',
+          content: stickerMarkdown
+        });
+        return true;
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : '发送贴纸失败，请稍后重试。';
+        setError(messageText);
+        return false;
+      }
+    },
+    [activeThread, contactId]
+  );
+
 
   const handleEditMessage = useCallback(
     async (message: Message) => {
@@ -1804,9 +1849,13 @@ const ChatApp = () => {
                               onMouseDown={(event) => event.preventDefault()}
                               onClick={(event) => {
                                 event.preventDefault();
-                                insertTextAtCursor(snippet, { prependNewLineIfNeeded: true });
-                                focusTextarea();
-                                setShowMoreOptions(false);
+                                void (async () => {
+                                  const ok = await handleSendCustomSticker(snippet);
+                                  if (ok) {
+                                    setShowMoreOptions(false);
+                                  }
+                                  focusTextarea();
+                                })();
                               }}
                               className="flex items-center text-left text-sm transition"
                               style={{flexDirection: 'column'}}
