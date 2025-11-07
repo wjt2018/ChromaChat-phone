@@ -25,7 +25,8 @@ import {
 } from '../../services/chatService';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { CONTACT_ICON_OPTIONS, ContactIconName, getRandomContactIcon } from '../../constants/icons';
-import { CUSTOM_STICKERS } from '../../constants/customStickers';
+import { CustomSticker } from '../../constants/customStickers';
+import { removeStickerByUrl } from '../../services/stickerService';
 import ContactDetailsModal from './ContactDetailsModal';
 import { ContactAvatar, AssistantAvatar, UserAvatar, UserProfile } from './AvatarComponents';
 import {
@@ -115,7 +116,6 @@ const BUILTIN_EMOJIS = [
   '🎁',
   '⚡'
 ] as const;
-
 
 const SettingsIcon = ({ className = 'h-5 w-5', ...props }: SVGProps<SVGSVGElement>) => (
   <svg
@@ -592,6 +592,14 @@ const ChatApp = () => {
   const selectedMessageKeySet = useMemo(() => new Set(selectedMessageKeys), [selectedMessageKeys]);
   const [messageLimit, setMessageLimit] = useState(INITIAL_DISPLAY_COUNT);
   const [showLoadMoreHint, setShowLoadMoreHint] = useState(false);
+  const customStickerRecords = useLiveQuery(() => db.stickers.orderBy('createdAt').toArray(), []);
+  const customStickers: CustomSticker[] = useMemo(
+    () => (customStickerRecords ?? []).map(({ label, url }) => ({ label, url })),
+    [customStickerRecords]
+  );
+  const stickerLongPressTimeoutRef = useRef<number | null>(null);
+  const ignoreNextStickerClickRef = useRef(false);
+  const [stickerDeleteTarget, setStickerDeleteTarget] = useState<string | null>(null);
 
   const closeMessageActions = useCallback(() => {
     setMessageActionTarget(null);
@@ -730,6 +738,45 @@ const ChatApp = () => {
 
   const contacts = useLiveQuery(() => db.contacts.orderBy('createdAt').toArray(), []);
   const threads = useLiveQuery(() => db.threads.orderBy('updatedAt').reverse().toArray(), []);
+
+  const clearStickerLongPress = useCallback(() => {
+    if (stickerLongPressTimeoutRef.current !== null) {
+      window.clearTimeout(stickerLongPressTimeoutRef.current);
+      stickerLongPressTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startStickerLongPress = useCallback(
+    (url: string) => {
+      clearStickerLongPress();
+      stickerLongPressTimeoutRef.current = window.setTimeout(() => {
+        setStickerDeleteTarget(url);
+        ignoreNextStickerClickRef.current = true;
+        stickerLongPressTimeoutRef.current = null;
+      }, 600);
+    },
+    [clearStickerLongPress]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearStickerLongPress();
+    };
+  }, [clearStickerLongPress]);
+
+  useEffect(() => {
+    if (!stickerDeleteTarget) {
+      return;
+    }
+    const handleClickOutside = () => {
+      setStickerDeleteTarget(null);
+      ignoreNextStickerClickRef.current = false;
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => {
+      window.removeEventListener('click', handleClickOutside);
+    };
+  }, [stickerDeleteTarget]);
 
   useEffect(() => {
     if (!contactId || !contacts) {
@@ -1028,7 +1075,8 @@ const ChatApp = () => {
     const { tokenCount, tokenLimit } = buildChatPayload({
       contact: activeContact,
       settings: contextSettings,
-      history
+      history,
+      stickers: customStickers
     });
 
     return {
@@ -1037,6 +1085,7 @@ const ChatApp = () => {
     };
   }, [
     activeContact,
+    customStickers,
     messages,
     settings.model,
     settings.systemPrompt,
@@ -1350,6 +1399,23 @@ const ChatApp = () => {
       }
     },
     [activeThread, contactId]
+  );
+
+  const handleRemoveCustomSticker = useCallback(
+    async (url: string) => {
+      try {
+        await removeStickerByUrl(url);
+        if (stickerDeleteTarget === url) {
+          setStickerDeleteTarget(null);
+          ignoreNextStickerClickRef.current = false;
+        }
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : '删除自定义表情失败，请稍后重试。';
+        setError(messageText);
+      }
+    },
+    [setError, stickerDeleteTarget]
   );
 
   const handleLoadMoreMessages = useCallback(() => {
@@ -1918,40 +1984,78 @@ const ChatApp = () => {
                           ))}
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex max-h-52 overflow-y-auto gap-3" style={{flexWrap: 'wrap'}}>
-                        {CUSTOM_STICKERS.map((sticker) => {
+                    ) : customStickers.length > 0 ? (
+                      <div className="flex max-h-52 overflow-y-auto gap-3" style={{ flexWrap: 'wrap' }}>
+                        {customStickers.map((sticker) => {
                           const snippet = `[${sticker.label}](${sticker.url})`;
                           return (
-                            <button
-                              key={sticker.url}
-                              type="button"
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                void (async () => {
-                                  const ok = await handleSendCustomSticker(snippet);
-                                  if (ok) {
-                                    setShowMoreOptions(false);
+                            <div key={sticker.url} className="relative flex flex-col items-center text-sm text-white/90">
+                              <button
+                                type="button"
+                                onMouseDown={(event) => {
+                                  startStickerLongPress(sticker.url);
+                                  event.preventDefault();
+                                }}
+                                onMouseUp={clearStickerLongPress}
+                                onMouseLeave={clearStickerLongPress}
+                                onTouchStart={() => startStickerLongPress(sticker.url)}
+                                onTouchEnd={clearStickerLongPress}
+                                onTouchCancel={clearStickerLongPress}
+                                onContextMenu={(event) => {
+                                  event.preventDefault();
+                                  ignoreNextStickerClickRef.current = false;
+                                  setStickerDeleteTarget(sticker.url);
+                                }}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  if (ignoreNextStickerClickRef.current) {
+                                    ignoreNextStickerClickRef.current = false;
+                                    return;
                                   }
-                                  focusTextarea();
-                                })();
-                              }}
-                              className="flex items-center text-left text-sm transition"
-                              style={{flexDirection: 'column'}}
-                            >
-                              <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/15">
+                                  if (stickerDeleteTarget) {
+                                    setStickerDeleteTarget(null);
+                                    ignoreNextStickerClickRef.current = false;
+                                    return;
+                                  }
+                                  clearStickerLongPress();
+                                  void (async () => {
+                                    const ok = await handleSendCustomSticker(snippet);
+                                    if (ok) {
+                                      setShowMoreOptions(false);
+                                    }
+                                    focusTextarea();
+                                  })();
+                                }}
+                                className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/15 transition hover:bg-white/25"
+                              >
                                 <img
                                   src={sticker.url}
                                   alt={sticker.label}
                                   className="h-16 w-16 object-cover"
                                   loading="lazy"
+                                  draggable={false}
                                 />
-                              </div>
-                              <div className="flex-1 truncate text-white/90">{sticker.label}</div>
-                            </button>
+                              </button>
+                              <div className="mt-1 max-w-16 truncate text-xs">{sticker.label}</div>
+                              {stickerDeleteTarget === sticker.url ? (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void handleRemoveCustomSticker(sticker.url);
+                                  }}
+                                  className="absolute -top-2 -right-2 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-xs font-semibold text-white shadow-lg"
+                                >
+                                  ×
+                                </button>
+                              ) : null}
+                            </div>
                           );
                         })}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-white/20 px-4 py-8 text-center text-xs text-white/70">
+                        暂无自定义表情
                       </div>
                     )}
                   </div>

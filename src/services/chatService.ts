@@ -2,8 +2,9 @@ import { db, Message, MessageRole, Thread, Contact } from './db';
 import { chatCompletion, ChatMessage } from './llmClient';
 import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
 import { ContactIconName, getRandomContactIcon } from '../constants/icons';
-import { CUSTOM_STICKERS } from '../constants/customStickers';
+import type { CustomSticker } from '../constants/customStickers';
 import { estimateTextTokens } from './tokenEstimator';
+import { getStickerCatalog } from './stickerService';
 
 const generateId = () => crypto.randomUUID();
 type SettingsSnapshot = ReturnType<typeof useSettingsStore.getState>;
@@ -31,7 +32,11 @@ const resolveTokenLimit = (tokenLimit?: number) => {
   return clamped;
 };
 
-const buildSystemPromptContent = (contact: Contact, settings: PromptSettingsSnapshot) => {
+const buildSystemPromptContent = (
+  contact: Contact,
+  settings: PromptSettingsSnapshot,
+  stickers: CustomSticker[]
+) => {
   const baseSystemPrompt = sanitizeText(settings.systemPrompt) || defaultSystemPrompt;
   const rolePrompt = sanitizeText(contact.prompt) || 'Not provided';
   const worldBook = sanitizeText(contact.worldBook) || 'Not provided';
@@ -65,12 +70,12 @@ const buildSystemPromptContent = (contact: Contact, settings: PromptSettingsSnap
     `Persona: ${effectiveUserPrompt}`
   );
 
-  if (CUSTOM_STICKERS.length > 0) {
+  if (stickers.length > 0) {
     sections.push(
       '',
       'Custom sticker catalog (when a sticker expresses the tone better, reply with the corresponding Markdown and send only the sticker):'
     );
-    CUSTOM_STICKERS.forEach((sticker) => {
+    stickers.forEach((sticker) => {
       sections.push(`- ${sticker.label}: ![${sticker.label}](${sticker.url})`);
     });
   }
@@ -88,15 +93,17 @@ export const buildChatPayload = ({
   contact,
   settings,
   history,
-  tokenLimit
+  tokenLimit,
+  stickers = []
 }: {
   contact: Contact;
   settings: PromptSettingsSnapshot;
   history: Message[];
   tokenLimit?: number;
+  stickers?: CustomSticker[];
 }): ChatPayload => {
   const limit = resolveTokenLimit(tokenLimit ?? contact.tokenLimit);
-  const systemContent = buildSystemPromptContent(contact, settings);
+  const systemContent = buildSystemPromptContent(contact, settings, stickers);
   const orderedHistory = [...history];
 
   const systemTokens = estimateTextTokens(systemContent) + SYSTEM_TOKEN_OVERHEAD;
@@ -296,6 +303,7 @@ export const sendMessageToLLM = async ({ threadId }: { threadId: string }) => {
 
   const settings = useSettingsStore.getState();
   const history = await db.messages.where({ threadId }).sortBy('createdAt');
+  const stickerCatalog = await getStickerCatalog();
   const payload = buildChatPayload({
     contact,
     settings: {
@@ -305,7 +313,8 @@ export const sendMessageToLLM = async ({ threadId }: { threadId: string }) => {
       model: settings.model
     },
     history,
-    tokenLimit: contact.tokenLimit
+    tokenLimit: contact.tokenLimit,
+    stickers: stickerCatalog
   });
 
   const { content } = await chatCompletion({
