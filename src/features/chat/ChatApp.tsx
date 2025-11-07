@@ -459,7 +459,7 @@ const MessageBubble = ({
   }, [clearLongPress]);
 
   const trimmedContent = message.content.trim();
-  const stickerRegex = /!\[(.*?)\]\((https?:\/\/[^\s)]+)\)/gi;
+  const stickerRegex = /\[(.*?)\]\((https?:\/\/[^\s)]+)\)/gi;
   const stickerMatches = Array.from(trimmedContent.matchAll(stickerRegex));
   const hasStickers = stickerMatches.length > 0;
   const textWithoutStickers = trimmedContent.replace(stickerRegex, '').trim();
@@ -579,6 +579,8 @@ const ChatApp = () => {
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const INITIAL_DISPLAY_COUNT = 50;
+  const PAGE_SIZE = 50;
   const [visibleMessageKeys, setVisibleMessageKeys] = useState<string[]>([]);
   const [animatingKeys, setAnimatingKeys] = useState<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
@@ -588,6 +590,8 @@ const ChatApp = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedMessageKeys, setSelectedMessageKeys] = useState<string[]>([]);
   const selectedMessageKeySet = useMemo(() => new Set(selectedMessageKeys), [selectedMessageKeys]);
+  const [messageLimit, setMessageLimit] = useState(INITIAL_DISPLAY_COUNT);
+  const [showLoadMoreHint, setShowLoadMoreHint] = useState(false);
 
   const closeMessageActions = useCallback(() => {
     setMessageActionTarget(null);
@@ -740,7 +744,8 @@ const ChatApp = () => {
   useEffect(() => {
     setShowMoreOptions(false);
     exitSelectionMode();
-  }, [contactId, exitSelectionMode]);
+    setMessageLimit(INITIAL_DISPLAY_COUNT);
+  }, [contactId, exitSelectionMode, INITIAL_DISPLAY_COUNT]);
 
   const activeThread = useMemo(() => {
     if (!threads || !contactId) {
@@ -751,11 +756,20 @@ const ChatApp = () => {
   const activeThreadId = activeThread?.id;
 
   const messages = useLiveQuery<Message[]>(
-    () =>
-      contactId && activeThread
-        ? db.messages.where({ threadId: activeThread.id }).sortBy('createdAt')
-        : Promise.resolve<Message[]>([]),
-    [activeThread?.id, contactId]
+    async () => {
+      if (!contactId || !activeThread) {
+        return [];
+      }
+      const recent = await db.messages
+        .where('threadId')
+        .equals(activeThread.id)
+        .reverse()
+        .limit(messageLimit)
+        .toArray();
+      recent.reverse();
+      return recent;
+    },
+    [activeThread?.id, contactId, messageLimit]
   );
 
   useEffect(() => {
@@ -920,6 +934,18 @@ const ChatApp = () => {
     return messages.filter((message) => keySet.has(getMessageKey(message)));
   }, [messages, visibleMessageKeys]);
 
+  const displayableMessages = useMemo(() => visibleMessages, [visibleMessages]);
+
+  const totalMessageCount = useLiveQuery(
+    () =>
+      activeThread?.id
+        ? db.messages.where('threadId').equals(activeThread.id).count()
+        : Promise.resolve(0),
+    [activeThread?.id]
+  );
+
+  const hasMoreDisplayMessages = (totalMessageCount ?? 0) > messageLimit;
+
   const animatingKeySet = useMemo(() => new Set(animatingKeys), [animatingKeys]);
 
   useEffect(() => {
@@ -935,6 +961,38 @@ const ChatApp = () => {
       behavior: 'smooth'
     });
   }, [activeThread?.id, visibleMessages.length]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      setShowLoadMoreHint(false);
+      return;
+    }
+    const handleScroll = () => {
+      setShowLoadMoreHint(container.scrollTop <= 0 && hasMoreDisplayMessages);
+    };
+    container.addEventListener('scroll', handleScroll);
+    handleScroll();
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [hasMoreDisplayMessages]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      setShowLoadMoreHint(false);
+      return;
+    }
+    const handleScroll = () => {
+      setShowLoadMoreHint(container.scrollTop <= 0 && hasMoreDisplayMessages);
+    };
+    container.addEventListener('scroll', handleScroll);
+    handleScroll();
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [hasMoreDisplayMessages]);
 
   const latestPendingUserKey = useMemo(() => {
     if (!messages || messages.length === 0) {
@@ -1294,6 +1352,34 @@ const ChatApp = () => {
     [activeThread, contactId]
   );
 
+  const handleLoadMoreMessages = useCallback(() => {
+    if (!hasMoreDisplayMessages) {
+      setShowLoadMoreHint(false);
+      return;
+    }
+    const container = messagesContainerRef.current;
+    const previousScrollHeight = container?.scrollHeight ?? 0;
+    const previousScrollTop = container?.scrollTop ?? 0;
+
+    setMessageLimit((prev) => {
+      const total = totalMessageCount ?? prev;
+      const remaining = Math.max(0, total - prev);
+      const increment = remaining === 0 ? PAGE_SIZE : Math.min(PAGE_SIZE, remaining);
+      return Math.min(prev + increment, total);
+    });
+    setShowLoadMoreHint(false);
+
+    requestAnimationFrame(() => {
+      const node = messagesContainerRef.current;
+      if (!node) {
+        return;
+      }
+      const newScrollHeight = node.scrollHeight;
+      const delta = newScrollHeight - previousScrollHeight;
+      node.scrollTop = previousScrollTop + delta;
+    });
+  }, [hasMoreDisplayMessages, totalMessageCount, PAGE_SIZE]);
+
 
   const handleEditMessage = useCallback(
     async (message: Message) => {
@@ -1529,12 +1615,23 @@ const ChatApp = () => {
             </div>
           </header>
 
-          <div
-            ref={messagesContainerRef}
-            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8"
-          >
+        <div
+          ref={messagesContainerRef}
+          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-6 sm:px-8"
+        >
+            {showLoadMoreHint && hasMoreDisplayMessages ? (
+              <div className="sticky top-0 z-20 flex justify-center">
+                <button
+                  type="button"
+                  onClick={handleLoadMoreMessages}
+                  className="rounded-full border border-white/30 bg-white/10 px-4 py-1 text-xs text-white/80 transition hover:border-white/60 hover:bg-white/20"
+                >
+                  加载更多
+                </button>
+              </div>
+            ) : null}
             {visibleMessages.length > 0 ? (
-              visibleMessages.map((message) => {
+              displayableMessages.map((message) => {
                 const messageKey = getMessageKey(message);
                 const isSelected = selectedMessageKeySet.has(messageKey);
                 return (
@@ -1824,7 +1921,7 @@ const ChatApp = () => {
                     ) : (
                       <div className="flex max-h-52 overflow-y-auto gap-3" style={{flexWrap: 'wrap'}}>
                         {CUSTOM_STICKERS.map((sticker) => {
-                          const snippet = `![${sticker.label}](${sticker.url})`;
+                          const snippet = `[${sticker.label}](${sticker.url})`;
                           return (
                             <button
                               key={sticker.url}
