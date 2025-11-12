@@ -4,9 +4,9 @@
   "id": "./",
   "start_url": "./",
   "scope": "./",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#0f172a",
-  "theme_color": "#38bdf8",
+  "theme_color": "#000000",
   "description": "Glassmorphism AI phone interface with LLM-powered apps.",
   "icons": [
     {
