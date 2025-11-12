@@ -4,7 +4,7 @@ import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
 import { ContactIconName, getRandomContactIcon } from '../constants/icons';
 import type { CustomSticker } from '../constants/customStickers';
 import { estimateTextTokens } from './tokenEstimator';
-import { getStickerCatalog } from './stickerService';
+import { getStickerCatalog, LOCAL_STICKER_SCHEME } from './stickerService';
 import { MOCK_IMAGE_PROMPT_INSTRUCTION } from '../constants/mockImage';
 
 const generateId = () => crypto.randomUUID();
@@ -79,6 +79,14 @@ const buildSystemPromptContent = (
     stickers.forEach((sticker) => {
       sections.push(`- ${sticker.label}: ![${sticker.label}](${sticker.url})`);
     });
+    const hasLocalStickers = stickers.some((sticker) => sticker.url.startsWith(LOCAL_STICKER_SCHEME));
+    if (hasLocalStickers) {
+      sections.push(
+        '',
+        'Notes:',
+        `- Some stickers use the ${LOCAL_STICKER_SCHEME} scheme. Always keep the link exactly as provided; the client will render it locally.`
+      );
+    }
   }
 
   sections.push(

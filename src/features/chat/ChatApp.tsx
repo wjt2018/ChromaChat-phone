@@ -11,7 +11,7 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { db, Contact, Message } from '../../services/db';
+import { db, Contact, Message, StickerRecord } from '../../services/db';
 import {
   buildChatPayload,
   createContact,
@@ -26,7 +26,7 @@ import {
 import { useSettingsStore } from '../../stores/settingsStore';
 import { CONTACT_ICON_OPTIONS, ContactIconName, getRandomContactIcon } from '../../constants/icons';
 import { CustomSticker } from '../../constants/customStickers';
-import { removeStickerByUrl } from '../../services/stickerService';
+import { addStickerToCatalog, createLocalStickerUrl, removeStickerByUrl } from '../../services/stickerService';
 import ContactDetailsModal from './ContactDetailsModal';
 import { ContactAvatar, AssistantAvatar, UserAvatar, UserProfile } from './AvatarComponents';
 import {
@@ -152,6 +152,47 @@ type MessageActionTarget = {
     isSelf: boolean;
     viewportWidth: number;
   };
+};
+
+type BatchUploadItem = {
+  id: string;
+  label: string;
+  file: File;
+  previewUrl: string;
+};
+
+const sanitizeLabel = (value: string, fallback: string) => {
+  const trimmed = value.trim();
+  if (trimmed.length > 0) {
+    return trimmed;
+  }
+  return fallback;
+};
+
+const deriveLabelFromFile = (file: File, index = 0) => {
+  const base = file.name.replace(/\.[^.]+$/, '');
+  return sanitizeLabel(base, `本地表情${index + 1}`);
+};
+
+const deriveLabelFromUrl = (url: string, index = 0) => {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const last = segments[segments.length - 1] ?? parsed.hostname;
+    const base = last.replace(/\.[^.]+$/, '');
+    return sanitizeLabel(base, `网络表情${index + 1}`);
+  } catch {
+    return `网络表情${index + 1}`;
+  }
+};
+
+const isValidExternalUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
 };
 
 const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: ContactSidebarProps) => (
@@ -395,7 +436,8 @@ const MessageBubble = ({
   shouldAnimate = false,
   onRequestActions,
   selectionMode = false,
-  selected = false
+  selected = false,
+  stickerSrcMap
 }: {
   message: Message;
   contact?: Contact;
@@ -414,6 +456,7 @@ const MessageBubble = ({
   ) => void;
   selectionMode?: boolean;
   selected?: boolean;
+  stickerSrcMap: Map<string, string>;
 }) => {
   const isSelf = message.role === 'user';
   const longPressRef = useRef<number | null>(null);
@@ -465,10 +508,38 @@ const MessageBubble = ({
   }, [clearLongPress]);
 
   const trimmedContent = message.content.trim();
-  const stickerRegex = /\[(.*?)\]\((https?:\/\/[^\s)]+)\)/gi;
-  const stickerMatches = Array.from(trimmedContent.matchAll(stickerRegex));
+  const stickerRegex = /\[([^\]]+)\]\(([^)]+)\)/gi;
+  type StickerMatch = {
+    key: string;
+    alt: string;
+    url: string;
+    resolvedSrc: string;
+    fullMatch: string;
+  };
+  const stickerMatches: StickerMatch[] = [];
+  for (const match of trimmedContent.matchAll(stickerRegex)) {
+    const fullMatch = match[0] ?? '';
+    const altRaw = match[1]?.trim() ?? '';
+    const url = match[2]?.trim() ?? '';
+    const resolvedSrc = stickerSrcMap.get(url);
+    if (!resolvedSrc) {
+      continue;
+    }
+    stickerMatches.push({
+      key: `${url}-${stickerMatches.length}`,
+      alt: altRaw.length > 0 ? altRaw : `sticker-${stickerMatches.length + 1}`,
+      url,
+      resolvedSrc,
+      fullMatch
+    });
+  }
   const hasStickers = stickerMatches.length > 0;
-  const textWithoutStickers = trimmedContent.replace(stickerRegex, '').trim();
+  const textWithoutStickers = hasStickers
+    ? stickerMatches.reduce(
+        (text, match) => text.replace(match.fullMatch, '').trim(),
+        trimmedContent
+      ).trim()
+    : trimmedContent;
   const mockImageDescription = parseMockImageContent(trimmedContent);
   const isMockImageMessage = Boolean(mockImageDescription);
   const showCompactContent = hasStickers || isMockImageMessage;
@@ -513,20 +584,16 @@ const MessageBubble = ({
         </button>
       ) : hasStickers ? (
         <div className="flex flex-col items-center gap-2">
-          {stickerMatches.map((match, index) => {
-            const [, altRaw, url] = match;
-            const alt = altRaw?.trim() || `sticker-${index + 1}`;
-            return (
-              <img
-                key={`${url}-${index}`}
-                src={url}
-                alt={alt}
-                className="max-h-28 max-w-full rounded-2xl object-contain"
-                loading="lazy"
-                draggable={false}
-              />
-            );
-          })}
+          {stickerMatches.map(({ key, alt, resolvedSrc }) => (
+            <img
+              key={key}
+              src={resolvedSrc}
+              alt={alt}
+              className="max-h-28 max-w-full rounded-2xl object-contain"
+              loading="lazy"
+              draggable={false}
+            />
+          ))}
           {textWithoutStickers.length > 0 ? (
             <span className="block whitespace-pre-wrap break-words text-xs text-white/80">
               {textWithoutStickers}
@@ -614,10 +681,24 @@ const ChatApp = () => {
   const [isMockImageModalOpen, setIsMockImageModalOpen] = useState(false);
   const [mockImageDescription, setMockImageDescription] = useState('');
   const [isSendingMockImage, setIsSendingMockImage] = useState(false);
+  const [isStickerModalOpen, setIsStickerModalOpen] = useState(false);
+  const [stickerModalTab, setStickerModalTab] = useState<'single' | 'batch'>('single');
+  const [stickerLabelInput, setStickerLabelInput] = useState('');
+  const [stickerImageUrlInput, setStickerImageUrlInput] = useState('');
+  const [singleStickerFile, setSingleStickerFile] = useState<File | null>(null);
+  const [singleStickerPreviewUrl, setSingleStickerPreviewUrl] = useState<string | null>(null);
+  const [stickerModalError, setStickerModalError] = useState<string | null>(null);
+  const [isSavingSticker, setIsSavingSticker] = useState(false);
+  const [batchFileItems, setBatchFileItems] = useState<BatchUploadItem[]>([]);
+  const [batchUrlInput, setBatchUrlInput] = useState('');
+  const [remoteLabelOverrides, setRemoteLabelOverrides] = useState<Record<string, string>>({});
+  const [isBatchSaving, setIsBatchSaving] = useState(false);
 
   const settings = useSettingsStore();
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const singleStickerFileInputRef = useRef<HTMLInputElement | null>(null);
+  const batchStickerFileInputRef = useRef<HTMLInputElement | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
   const INITIAL_DISPLAY_COUNT = 50;
   const PAGE_SIZE = 50;
@@ -632,14 +713,36 @@ const ChatApp = () => {
   const selectedMessageKeySet = useMemo(() => new Set(selectedMessageKeys), [selectedMessageKeys]);
   const [messageLimit, setMessageLimit] = useState(INITIAL_DISPLAY_COUNT);
   const [showLoadMoreHint, setShowLoadMoreHint] = useState(false);
-  const customStickerRecords = useLiveQuery(() => db.stickers.orderBy('createdAt').toArray(), []);
+  const customStickerRecords = useLiveQuery<StickerRecord[]>(() => db.stickers.orderBy('createdAt').toArray(), []);
   const customStickers: CustomSticker[] = useMemo(
     () => (customStickerRecords ?? []).map(({ label, url }) => ({ label, url })),
     [customStickerRecords]
   );
+  const [stickerSrcMap, setStickerSrcMap] = useState<Map<string, string>>(new Map());
   const stickerLongPressTimeoutRef = useRef<number | null>(null);
   const ignoreNextStickerClickRef = useRef(false);
   const [stickerDeleteTarget, setStickerDeleteTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (!customStickerRecords) {
+      setStickerSrcMap(new Map());
+      return;
+    }
+    const map = new Map<string, string>();
+    const objectUrls: string[] = [];
+    customStickerRecords.forEach((record) => {
+      if (record.blobData) {
+        const objectUrl = URL.createObjectURL(record.blobData);
+        map.set(record.url, objectUrl);
+        objectUrls.push(objectUrl);
+      } else {
+        map.set(record.url, record.url);
+      }
+    });
+    setStickerSrcMap(map);
+    return () => {
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [customStickerRecords]);
   const closeMockImageModal = useCallback(() => {
     setIsMockImageModalOpen(false);
     setMockImageDescription('');
@@ -649,6 +752,251 @@ const ChatApp = () => {
     setMockImageDescription('');
     setIsMockImageModalOpen(true);
   }, []);
+
+  const releaseBatchPreviewUrls = useCallback((items: BatchUploadItem[]) => {
+    items.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+  }, []);
+
+  const clearSingleStickerSelection = useCallback(() => {
+    if (singleStickerPreviewUrl) {
+      URL.revokeObjectURL(singleStickerPreviewUrl);
+    }
+    setSingleStickerPreviewUrl(null);
+    setSingleStickerFile(null);
+  }, [singleStickerPreviewUrl]);
+
+  const resetStickerModalState = useCallback(() => {
+    setStickerLabelInput('');
+    setStickerImageUrlInput('');
+    setStickerModalError(null);
+    clearSingleStickerSelection();
+    releaseBatchPreviewUrls(batchFileItems);
+    setBatchFileItems([]);
+    setBatchUrlInput('');
+    setRemoteLabelOverrides({});
+  }, [batchFileItems, clearSingleStickerSelection, releaseBatchPreviewUrls]);
+
+  const openStickerModal = useCallback(() => {
+    resetStickerModalState();
+    setStickerModalTab('single');
+    setIsStickerModalOpen(true);
+  }, [resetStickerModalState]);
+
+  const closeStickerModal = useCallback(() => {
+    setIsStickerModalOpen(false);
+    resetStickerModalState();
+  }, [resetStickerModalState]);
+
+  const batchFileItemsRef = useRef<BatchUploadItem[]>([]);
+  useEffect(() => {
+    batchFileItemsRef.current = batchFileItems;
+  }, [batchFileItems]);
+  useEffect(() => {
+    return () => {
+      releaseBatchPreviewUrls(batchFileItemsRef.current);
+    };
+  }, [releaseBatchPreviewUrls]);
+  useEffect(() => {
+    return () => {
+      if (singleStickerPreviewUrl) {
+        URL.revokeObjectURL(singleStickerPreviewUrl);
+      }
+    };
+  }, [singleStickerPreviewUrl]);
+
+  const handleSingleStickerFileChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        setStickerModalError('仅支持图片文件，请重新选择');
+        event.target.value = '';
+        return;
+      }
+      setStickerModalError(null);
+      clearSingleStickerSelection();
+      setSingleStickerFile(file);
+      const previewUrl = URL.createObjectURL(file);
+      setSingleStickerPreviewUrl(previewUrl);
+      setStickerImageUrlInput('');
+      event.target.value = '';
+    },
+    [clearSingleStickerSelection]
+  );
+
+  const handleBatchFilesChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+    let encounteredInvalid = false;
+    setBatchFileItems((prev) => {
+      const additions: BatchUploadItem[] = [];
+      let offset = prev.length;
+      files.forEach((file) => {
+        if (!file.type.startsWith('image/')) {
+          encounteredInvalid = true;
+          return;
+        }
+        additions.push({
+          id: crypto.randomUUID(),
+          file,
+          label: deriveLabelFromFile(file, offset + additions.length),
+          previewUrl: URL.createObjectURL(file)
+        });
+      });
+      return [...prev, ...additions];
+    });
+    if (encounteredInvalid) {
+      setStickerModalError('部分文件不是图片，已跳过非图片文件');
+    } else {
+      setStickerModalError(null);
+    }
+    event.target.value = '';
+  }, []);
+
+  const handleBatchFileLabelChange = useCallback((id: string, value: string) => {
+    setBatchFileItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, label: value } : item))
+    );
+  }, []);
+
+  const handleRemoveBatchFileItem = useCallback((id: string) => {
+    setBatchFileItems((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((item) => item.id !== id);
+    });
+  }, []);
+
+  const handleRemoteLabelChange = useCallback((id: string, value: string) => {
+    setRemoteLabelOverrides((prev) => ({
+      ...prev,
+      [id]: value
+    }));
+  }, []);
+
+  const parsedBatchUrlItems = useMemo(
+    () =>
+      batchUrlInput
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .map((url, index) => ({
+          id: `remote-${index}-${url}`,
+          url,
+          label: deriveLabelFromUrl(url, index)
+        })),
+    [batchUrlInput]
+  );
+  useEffect(() => {
+    setRemoteLabelOverrides((prev) => {
+      const validIds = new Set(parsedBatchUrlItems.map((item) => item.id));
+      let changed = false;
+      const next: Record<string, string> = {};
+      Object.entries(prev).forEach(([id, label]) => {
+        if (validIds.has(id)) {
+          next[id] = label;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [parsedBatchUrlItems]);
+  const hasBatchPendingItems = batchFileItems.length > 0 || parsedBatchUrlItems.length > 0;
+
+  const handleSingleStickerConfirm = useCallback(async () => {
+    const trimmedUrl = stickerImageUrlInput.trim();
+    const hasFile = Boolean(singleStickerFile);
+    const hasUrl = trimmedUrl.length > 0;
+    if (!hasFile && !hasUrl) {
+      setStickerModalError('请先输入图片 URL 或选择本地图片');
+      return;
+    }
+    if (hasFile && hasUrl) {
+      setStickerModalError('图片 URL 与本地上传只能选择其一');
+      return;
+    }
+    if (hasUrl && !isValidExternalUrl(trimmedUrl)) {
+      setStickerModalError('请输入有效的图片 URL');
+      return;
+    }
+    const fallbackLabel =
+      hasFile && singleStickerFile
+        ? deriveLabelFromFile(singleStickerFile)
+        : deriveLabelFromUrl(trimmedUrl);
+    const label = sanitizeLabel(stickerLabelInput, fallbackLabel);
+    setStickerModalError(null);
+    setIsSavingSticker(true);
+    try {
+      if (hasFile && singleStickerFile) {
+        await addStickerToCatalog({
+          label,
+          url: createLocalStickerUrl(),
+          source: 'upload',
+          blobData: singleStickerFile
+        });
+      } else if (hasUrl) {
+        await addStickerToCatalog({
+          label,
+          url: trimmedUrl,
+          source: 'remote'
+        });
+      }
+      closeStickerModal();
+    } catch (err) {
+      setStickerModalError(err instanceof Error ? err.message : '添加表情失败，请稍后重试');
+    } finally {
+      setIsSavingSticker(false);
+    }
+  }, [
+    closeStickerModal,
+    singleStickerFile,
+    stickerImageUrlInput,
+    stickerLabelInput
+  ]);
+
+  const handleBatchStickerConfirm = useCallback(async () => {
+    if (batchFileItems.length === 0 && parsedBatchUrlItems.length === 0) {
+      setStickerModalError('请至少添加一张图片或一个图片链接');
+      return;
+    }
+    const invalidUrl = parsedBatchUrlItems.find((item) => !isValidExternalUrl(item.url));
+    if (invalidUrl) {
+      setStickerModalError('存在无效的图片 URL，请检查输入');
+      return;
+    }
+    setStickerModalError(null);
+    setIsBatchSaving(true);
+    try {
+      for (const item of batchFileItems) {
+        await addStickerToCatalog({
+          label: sanitizeLabel(item.label, deriveLabelFromFile(item.file)),
+          url: createLocalStickerUrl(),
+          source: 'upload',
+          blobData: item.file
+        });
+      }
+      for (const item of parsedBatchUrlItems) {
+        const override = remoteLabelOverrides[item.id];
+        await addStickerToCatalog({
+          label: sanitizeLabel(override ?? item.label, deriveLabelFromUrl(item.url)),
+          url: item.url,
+          source: 'remote'
+        });
+      }
+      closeStickerModal();
+    } catch (err) {
+      setStickerModalError(err instanceof Error ? err.message : '批量添加失败，请稍后重试');
+    } finally {
+      setIsBatchSaving(false);
+    }
+  }, [batchFileItems, parsedBatchUrlItems, remoteLabelOverrides, closeStickerModal]);
 
 
   const closeMessageActions = useCallback(() => {
@@ -1823,6 +2171,7 @@ const ChatApp = () => {
                         onRequestActions={isSelectionMode ? undefined : openMessageActions}
                         selectionMode={isSelectionMode}
                         selected={isSelected}
+                        stickerSrcMap={stickerSrcMap}
                       />
                     </div>
                   </div>
@@ -2031,20 +2380,29 @@ const ChatApp = () => {
                           自定义
                         </button>
                       </div>
-                    <button
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        updateSelectionRef(textareaRef.current);
-                      }}
-                      onClick={() => {
-                        setMoreOptionsView('default');
-                        focusTextarea();
-                      }}
-                      className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/10"
-                      >
-                        返回
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={openStickerModal}
+                          className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/90 transition hover:border-white/40 hover:bg-white/10"
+                        >
+                          添加
+                        </button>
+                        <button
+                          type="button"
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            updateSelectionRef(textareaRef.current);
+                          }}
+                          onClick={() => {
+                            setMoreOptionsView('default');
+                            focusTextarea();
+                          }}
+                          className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/10"
+                        >
+                          返回
+                        </button>
+                      </div>
                     </div>
                     {emojiActiveTab === 'builtin' ? (
                       <div className="max-h-48 overflow-y-auto rounded-2xl border border-white/10 bg-white/10 p-2">
@@ -2071,6 +2429,7 @@ const ChatApp = () => {
                       <div className="flex max-h-52 overflow-y-auto gap-3" style={{ flexWrap: 'wrap' }}>
                         {customStickers.map((sticker) => {
                           const snippet = `[${sticker.label}](${sticker.url})`;
+                          const previewSrc = stickerSrcMap.get(sticker.url) ?? sticker.url;
                           return (
                             <div key={sticker.url} className="relative flex flex-col items-center text-sm text-white/90">
                               <button
@@ -2112,7 +2471,7 @@ const ChatApp = () => {
                                 className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white/15 transition hover:bg-white/25"
                               >
                                 <img
-                                  src={sticker.url}
+                                  src={previewSrc}
                                   alt={sticker.label}
                                   className="h-16 w-16 object-cover"
                                   loading="lazy"
@@ -2151,6 +2510,261 @@ const ChatApp = () => {
         </section>
       </div>
 
+      {isStickerModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8"
+          onClick={closeStickerModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-2xl rounded-3xl border border-white/10 bg-slate-900/95 p-6 text-white shadow-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">添加自定义表情</h3>
+                <p className="text-sm text-white/70">支持网络图片或本地图片（本地图片将以 Blob 形式保存在离线数据库中）。</p>
+              </div>
+              <div className="flex rounded-full bg-white/10 p-1 text-xs text-white/70">
+                <button
+                  type="button"
+                  onClick={() => setStickerModalTab('single')}
+                  className={`rounded-full px-3 py-1 transition ${
+                    stickerModalTab === 'single' ? 'bg-white/25 text-white' : 'text-white/70'
+                  }`}
+                >
+                  添加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStickerModalTab('batch')}
+                  className={`rounded-full px-3 py-1 transition ${
+                    stickerModalTab === 'batch' ? 'bg-white/25 text-white' : 'text-white/70'
+                  }`}
+                >
+                  批量添加
+                </button>
+              </div>
+            </div>
+
+            {stickerModalError ? (
+              <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-200">
+                {stickerModalError}
+              </div>
+            ) : null}
+
+            {stickerModalTab === 'single' ? (
+              <div className="mt-5 space-y-5">
+                <div className="flex flex-col gap-4 sm:flex-row">
+                  <div className="flex h-28 w-full flex-none items-center justify-center rounded-2xl border border-dashed border-white/20 bg-white/5 sm:h-40 sm:w-40">
+                    {singleStickerPreviewUrl ? (
+                      <img
+                        src={singleStickerPreviewUrl}
+                        alt="预览"
+                        className="max-h-full max-w-full rounded-2xl object-contain"
+                      />
+                    ) : stickerImageUrlInput.trim() ? (
+                      <img
+                        src={stickerImageUrlInput.trim()}
+                        alt="预览"
+                        className="max-h-full max-w-full rounded-2xl object-contain"
+                      />
+                    ) : (
+                      <span className="text-xs text-white/60">图片预览</span>
+                    )}
+                  </div>
+                  <div className="flex flex-1 flex-col gap-4">
+                    <label className="text-sm text-white/80">
+                      表情标签
+                      <input
+                        value={stickerLabelInput}
+                        onChange={(event) => setStickerLabelInput(event.target.value)}
+                        placeholder="例如：开心、可爱等"
+                        className="mt-1 w-full rounded-2xl border border-white/20 bg-white/10 px-3 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+                      />
+                    </label>
+                    <label className="text-sm text-white/80">
+                      图片 URL
+                      <input
+                        value={stickerImageUrlInput}
+                        onChange={(event) => {
+                          setStickerImageUrlInput(event.target.value);
+                          if (event.target.value.trim().length > 0) {
+                            clearSingleStickerSelection();
+                          }
+                          setStickerModalError(null);
+                        }}
+                        placeholder="https://example.com/sticker.png"
+                        className="mt-1 w-full rounded-2xl border border-white/20 bg-white/10 px-3 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => singleStickerFileInputRef.current?.click()}
+                    className="rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
+                  >
+                    从本地上传
+                  </button>
+                  {singleStickerFile ? (
+                    <span className="text-xs text-white/60">已选择：{singleStickerFile.name}</span>
+                  ) : null}
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={closeStickerModal}
+                    className="flex-1 rounded-2xl border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10"
+                  >
+                    返回
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSingleStickerConfirm}
+                    disabled={
+                      isSavingSticker ||
+                      (!singleStickerFile && stickerImageUrlInput.trim().length === 0)
+                    }
+                    className="flex-1 rounded-2xl bg-cyan-400/90 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-300/40 disabled:text-slate-600"
+                  >
+                    {isSavingSticker ? '保存中...' : '确认'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 space-y-5">
+                <div className="rounded-2xl border border-white/15 bg-white/5 p-3">
+                  {hasBatchPendingItems ? (
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                      {batchFileItems.map((item) => (
+                        <div key={item.id} className="rounded-2xl border border-white/10 bg-white/5 p-2 text-xs text-white/80">
+                          <div className="relative mb-2 flex h-28 items-center justify-center overflow-hidden rounded-xl bg-white/10">
+                            <img src={item.previewUrl} alt={item.label} className="h-full w-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBatchFileItem(item.id)}
+                              className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-xs font-semibold text-white"
+                            >
+                              ×
+                            </button>
+                          </div>
+                          <label className="block text-[11px] text-white/60">
+                            表情标签
+                            <input
+                              type="text"
+                              value={item.label}
+                              onChange={(event) => handleBatchFileLabelChange(item.id, event.target.value)}
+                              className="mt-1 w-full rounded-xl border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+                              placeholder="输入标签"
+                            />
+                          </label>
+                          <p className="mt-1 truncate text-[11px] text-white/50">{item.file.name}</p>
+                        </div>
+                      ))}
+                      {parsedBatchUrlItems.map((item) => {
+                        const valid = isValidExternalUrl(item.url);
+                        const labelValue = remoteLabelOverrides[item.id] ?? item.label;
+                        return (
+                          <div
+                            key={item.id}
+                            className={`rounded-2xl border p-2 text-xs ${
+                              valid ? 'border-white/10 bg-white/5 text-white/80' : 'border-red-500/40 bg-red-500/10 text-red-100'
+                            }`}
+                          >
+                            <div className="mb-2 flex h-28 items-center justify-center overflow-hidden rounded-xl bg-white/10">
+                              {valid ? (
+                                <img src={item.url} alt={labelValue} className="h-full w-full object-cover" />
+                              ) : (
+                                <span className="text-[11px] text-red-200">无效 URL</span>
+                              )}
+                            </div>
+                            <label className="block text-[11px]">
+                              表情标签
+                              <input
+                                type="text"
+                                value={labelValue}
+                                onChange={(event) => handleRemoteLabelChange(item.id, event.target.value)}
+                                disabled={!valid}
+                                className="mt-1 w-full rounded-xl border border-white/15 bg-white/10 px-2 py-1 text-xs text-white outline-none transition focus:border-white/40 focus:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                                placeholder="输入标签"
+                              />
+                            </label>
+                            <p className="mt-1 break-all text-[11px] opacity-70">{item.url}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-white/20 px-4 py-8 text-center text-sm text-white/60">
+                      还没有待添加的表情，请选择本地图片或输入图片链接。
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => batchStickerFileInputRef.current?.click()}
+                    className="rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/40 hover:bg-white/20"
+                  >
+                    从本地选择图片
+                  </button>
+                  <span className="text-xs text-white/60">可一次选择多张图片，上传后可单独命名或删除。</span>
+                </div>
+                <label className="block text-sm text-white/80">
+                  图片 URL（使用英文逗号分隔）
+                  <textarea
+                    value={batchUrlInput}
+                    onChange={(event) => {
+                      setBatchUrlInput(event.target.value);
+                      setStickerModalError(null);
+                    }}
+                    rows={3}
+                    placeholder="https://a.example.com/a.png, https://b.example.com/b.png"
+                    className="mt-1 w-full rounded-2xl border border-white/20 bg-white/10 px-3 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+                  />
+                </label>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={closeStickerModal}
+                    className="flex-1 rounded-2xl border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10"
+                  >
+                    返回
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBatchStickerConfirm}
+                    disabled={isBatchSaving || !hasBatchPendingItems}
+                    className="flex-1 rounded-2xl bg-cyan-400/90 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-300/40 disabled:text-slate-600"
+                  >
+                    {isBatchSaving ? '导入中...' : '确认'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <input
+              ref={singleStickerFileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleSingleStickerFileChange}
+            />
+            <input
+              ref={batchStickerFileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleBatchFilesChange}
+            />
+          </div>
+        </div>
+      ) : null}
+
       {isMockImageModalOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8"
@@ -2162,9 +2776,7 @@ const ChatApp = () => {
             className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-white shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold">模拟图片</h3>
-            <p className="mt-1 text-sm text-white/70">输入描述后，将以占位图片的形式发送到对话中。</p>
-            <label className="mt-4 block text-sm text-white/80">
+            <label className="block text-sm text-white/80">
               图片描述
               <textarea
                 value={mockImageDescription}

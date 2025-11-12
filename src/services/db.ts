@@ -45,13 +45,16 @@ export interface Setting {
 
 export type StickerRecord = CustomSticker & {
   createdAt: number;
+  source?: 'remote' | 'upload';
+  blobData?: Blob;
 };
 
 const buildDefaultStickerRecords = () => {
   const baseTimestamp = Date.now();
   return CUSTOM_STICKERS.map((sticker, index) => ({
     ...sticker,
-    createdAt: baseTimestamp + index
+    createdAt: baseTimestamp + index,
+    source: 'remote' as const
   }));
 };
 
