@@ -35,6 +35,7 @@ import {
   normalizeAutoReplyDelayOption,
   snapToTokenStep
 } from './utils';
+import { buildMockImageContent, parseMockImageContent } from '../../constants/mockImage';
 
 const randomColor = () => {
   const palette = ['#38bdf8', '#f472b6', '#34d399', '#f59e0b', '#a855f7', '#ef4444', '#fb7185'];
@@ -417,6 +418,11 @@ const MessageBubble = ({
   const isSelf = message.role === 'user';
   const longPressRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [mockImageRevealed, setMockImageRevealed] = useState(false);
+
+  useEffect(() => {
+    setMockImageRevealed(false);
+  }, [message.content]);
 
   const triggerActions = useCallback(() => {
     if (onRequestActions) {
@@ -463,6 +469,9 @@ const MessageBubble = ({
   const stickerMatches = Array.from(trimmedContent.matchAll(stickerRegex));
   const hasStickers = stickerMatches.length > 0;
   const textWithoutStickers = trimmedContent.replace(stickerRegex, '').trim();
+  const mockImageDescription = parseMockImageContent(trimmedContent);
+  const isMockImageMessage = Boolean(mockImageDescription);
+  const showCompactContent = hasStickers || isMockImageMessage;
 
   const bubble = (
     <div
@@ -471,10 +480,38 @@ const MessageBubble = ({
           ? 'bg-cyan-400/85 text-slate-900 shadow-cyan-500/40 backdrop-blur-md'
           : 'bg-white/15 text-white shadow-white/10 backdrop-blur-md'
       } ${selectionMode && selected ? 'ring-2 ring-cyan-300/70 ring-offset-2 ring-offset-slate-950/40' : ''} ${
-        hasStickers ? 'p-2 sm:p-3 text-center' : ''
+        showCompactContent ? 'p-2 sm:p-3 text-center' : ''
       }`}
     >
-      {hasStickers ? (
+      {isMockImageMessage && mockImageDescription ? (
+        <button
+          type="button"
+          onClick={() => setMockImageRevealed((prev) => !prev)}
+          className={`flex w-full flex-col items-center gap-2 rounded-2xl border border-dashed ${
+            isSelf ? 'border-slate-900/30 text-slate-900' : 'border-white/40 text-white'
+          } bg-white/5 px-6 py-5 text-center transition hover:bg-white/10`}
+        >
+          {mockImageRevealed ? (
+            <>
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{mockImageDescription}</p>
+              <span className="text-xs opacity-70">再次点击收起</span>
+            </>
+          ) : (
+            <>
+              <span
+                className={`flex h-16 w-16 items-center justify-center rounded-2xl ${
+                  isSelf ? 'bg-slate-900/10 text-slate-900' : 'bg-white/10 text-white'
+                }`}
+              >
+                <svg aria-hidden="true" className="h-8 w-8" viewBox="0 0 24 24" fill="currentColor">
+                  <use xlinkHref="#icon-photo" />
+                </svg>
+              </span>
+              <span className="text-xs opacity-70">点击查看描述</span>
+            </>
+          )}
+        </button>
+      ) : hasStickers ? (
         <div className="flex flex-col items-center gap-2">
           {stickerMatches.map((match, index) => {
             const [, altRaw, url] = match;
@@ -574,6 +611,9 @@ const ChatApp = () => {
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [moreOptionsView, setMoreOptionsView] = useState<'default' | 'emoji'>('default');
   const [emojiActiveTab, setEmojiActiveTab] = useState<'builtin' | 'custom'>('builtin');
+  const [isMockImageModalOpen, setIsMockImageModalOpen] = useState(false);
+  const [mockImageDescription, setMockImageDescription] = useState('');
+  const [isSendingMockImage, setIsSendingMockImage] = useState(false);
 
   const settings = useSettingsStore();
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -600,6 +640,16 @@ const ChatApp = () => {
   const stickerLongPressTimeoutRef = useRef<number | null>(null);
   const ignoreNextStickerClickRef = useRef(false);
   const [stickerDeleteTarget, setStickerDeleteTarget] = useState<string | null>(null);
+  const closeMockImageModal = useCallback(() => {
+    setIsMockImageModalOpen(false);
+    setMockImageDescription('');
+  }, []);
+
+  const openMockImageModal = useCallback(() => {
+    setMockImageDescription('');
+    setIsMockImageModalOpen(true);
+  }, []);
+
 
   const closeMessageActions = useCallback(() => {
     setMessageActionTarget(null);
@@ -801,6 +851,34 @@ const ChatApp = () => {
     return threads.find((thread) => thread.contactId === contactId);
   }, [threads, contactId]);
   const activeThreadId = activeThread?.id;
+
+  const handleSendMockImage = useCallback(async () => {
+    if (!activeThread || !contactId) {
+      setError('请选择会话后再发送模拟图片');
+      return;
+    }
+    const description = mockImageDescription.trim();
+    if (description.length === 0) {
+      return;
+    }
+    setError(null);
+    try {
+      setIsSendingMockImage(true);
+      await persistMessage({
+        threadId: activeThread.id,
+        role: 'user',
+        content: buildMockImageContent(description)
+      });
+      closeMockImageModal();
+      setShowMoreOptions(false);
+    } catch (err) {
+      const messageText =
+        err instanceof Error ? err.message : '发送模拟图片失败，请稍后重试';
+      setError(messageText);
+    } finally {
+      setIsSendingMockImage(false);
+    }
+  }, [activeThread, contactId, mockImageDescription, closeMockImageModal]);
 
   const messages = useLiveQuery<Message[]>(
     async () => {
@@ -1142,6 +1220,7 @@ const ChatApp = () => {
   ]);
   const hasPendingUserMessages = Boolean(latestPendingUserKey);
   const trimmedInputValue = inputValue.trim();
+  const trimmedMockImageDescription = mockImageDescription.trim();
   const hasApiKey = settings.apiKey.trim().length > 0;
   const canSummarizeLongMemory =
     Boolean(activeThread && messages && messages.length > 0 && hasApiKey);
@@ -1918,11 +1997,15 @@ const ChatApp = () => {
                     </button>
                     <button
                       type="button"
-                      disabled
-                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs text-white/50 transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-50"
-                      title="功能 C"
+                      onClick={openMockImageModal}
+                      disabled={!activeThread}
+                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      title="模拟图片"
                     >
-                      功能 C
+                      <svg aria-hidden="true" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                        <use xlinkHref="#icon-photo-copy" />
+                      </svg>
+                      <span className="sr-only">模拟图片</span>
                     </button>
                   </div>
                 ) : (
@@ -2067,6 +2150,51 @@ const ChatApp = () => {
           </footer>
         </section>
       </div>
+
+      {isMockImageModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8"
+          onClick={closeMockImageModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold">模拟图片</h3>
+            <p className="mt-1 text-sm text-white/70">输入描述后，将以占位图片的形式发送到对话中。</p>
+            <label className="mt-4 block text-sm text-white/80">
+              图片描述
+              <textarea
+                value={mockImageDescription}
+                onChange={(event) => setMockImageDescription(event.target.value)}
+                rows={3}
+                placeholder="输入图片描述"
+                className="mt-2 w-full resize-none rounded-2xl border border-white/15 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+                autoFocus
+              />
+            </label>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={closeMockImageModal}
+                className="flex-1 rounded-2xl border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleSendMockImage}
+                disabled={trimmedMockImageDescription.length === 0 || isSendingMockImage}
+                className="flex-1 rounded-2xl bg-cyan-400/90 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-300/40 disabled:text-slate-600"
+              >
+                {isSendingMockImage ? '发送中...' : '确认'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {messageActionTarget
         ? (() => {

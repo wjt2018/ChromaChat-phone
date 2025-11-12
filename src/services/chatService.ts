@@ -5,6 +5,7 @@ import { ContactIconName, getRandomContactIcon } from '../constants/icons';
 import type { CustomSticker } from '../constants/customStickers';
 import { estimateTextTokens } from './tokenEstimator';
 import { getStickerCatalog } from './stickerService';
+import { MOCK_IMAGE_PROMPT_INSTRUCTION } from '../constants/mockImage';
 
 const generateId = () => crypto.randomUUID();
 type SettingsSnapshot = ReturnType<typeof useSettingsStore.getState>;
@@ -79,6 +80,12 @@ const buildSystemPromptContent = (
       sections.push(`- ${sticker.label}: ![${sticker.label}](${sticker.url})`);
     });
   }
+
+  sections.push(
+    '',
+    'Mock image guideline (always include as-is when needed):',
+    MOCK_IMAGE_PROMPT_INSTRUCTION
+  );
 
   return sections.join('\n');
 };
