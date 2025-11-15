@@ -31,7 +31,22 @@ export const parseMockVoiceContent = (content: string): MockVoicePayload | null 
     return null;
   }
   try {
-    const raw = JSON.parse(content.slice(MOCK_VOICE_PREFIX.length)) as Partial<MockVoicePayload>;
+    const payloadRaw = content.slice(MOCK_VOICE_PREFIX.length).trim();
+    const tryParse = (value: string): Partial<MockVoicePayload> | null => {
+      try {
+        return JSON.parse(value) as Partial<MockVoicePayload>;
+      } catch {
+        return null;
+      }
+    };
+    let raw = tryParse(payloadRaw);
+    if (!raw && payloadRaw.includes('\\')) {
+      const cleaned = payloadRaw.replace(/\\(?=[{}\[\]":,])/g, '');
+      raw = tryParse(cleaned);
+    }
+    if (!raw) {
+      return null;
+    }
     const transcript =
       typeof raw.transcript === 'string' ? raw.transcript.trim() : '';
     if (!transcript) {
@@ -50,3 +65,5 @@ export const parseMockVoiceContent = (content: string): MockVoicePayload | null 
     return null;
   }
 };
+
+export const MOCK_VOICE_PROMPT_INSTRUCTION = `当用户要求语音或者你认为语音能更好传达情绪时，请把回复改为“语音消息”：只发送一行 ${MOCK_VOICE_PREFIX}{"transcript":"在这里写语音文本","durationSeconds":语音时长（秒，可选）}。语音文本就是用户会看到的字幕，禁止夹带其他说明或 Markdown，语音消息与普通文本消息不能混在一起。`;

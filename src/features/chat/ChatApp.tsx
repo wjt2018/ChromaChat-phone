@@ -1786,8 +1786,15 @@ const ChatApp = () => {
 
     try {
       const response = await sendMessageToLLM({ threadId: activeThreadId });
-      const segments = splitAssistantResponse(response);
-      const parts = segments.length > 0 ? segments : [response.trim()];
+      const normalizedResponse = response.trim();
+      const isVoiceMessage = parseMockVoiceContent(normalizedResponse) !== null;
+      const segments = isVoiceMessage ? [] : splitAssistantResponse(normalizedResponse);
+      const parts =
+        segments.length > 0 || isVoiceMessage
+          ? isVoiceMessage
+            ? [normalizedResponse]
+            : segments
+          : [normalizedResponse];
 
       for (const part of parts) {
         const trimmed = part.trim();

@@ -6,6 +6,7 @@ import type { CustomSticker } from '../constants/customStickers';
 import { estimateTextTokens } from './tokenEstimator';
 import { getStickerCatalog, LOCAL_STICKER_SCHEME } from './stickerService';
 import { MOCK_IMAGE_PROMPT_INSTRUCTION } from '../constants/mockImage';
+import { MOCK_VOICE_PROMPT_INSTRUCTION } from '../constants/mockVoice';
 
 const generateId = () => crypto.randomUUID();
 type SettingsSnapshot = ReturnType<typeof useSettingsStore.getState>;
@@ -94,6 +95,8 @@ const buildSystemPromptContent = (
     'Mock image guideline (always include as-is when needed):',
     MOCK_IMAGE_PROMPT_INSTRUCTION
   );
+
+  sections.push('', 'Mock voice guideline (always include as-is when needed):', MOCK_VOICE_PROMPT_INSTRUCTION);
 
   return sections.join('\n');
 };
