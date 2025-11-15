@@ -36,6 +36,11 @@ import {
   snapToTokenStep
 } from './utils';
 import { buildMockImageContent, parseMockImageContent } from '../../constants/mockImage';
+import {
+  buildMockVoiceContent,
+  estimateVoiceDurationSeconds,
+  parseMockVoiceContent
+} from '../../constants/mockVoice';
 
 const randomColor = () => {
   const palette = ['#38bdf8', '#f472b6', '#34d399', '#f59e0b', '#a855f7', '#ef4444', '#fb7185'];
@@ -462,9 +467,11 @@ const MessageBubble = ({
   const longPressRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [mockImageRevealed, setMockImageRevealed] = useState(false);
+  const [voiceRevealed, setVoiceRevealed] = useState(false);
 
   useEffect(() => {
     setMockImageRevealed(false);
+    setVoiceRevealed(false);
   }, [message.content]);
 
   const triggerActions = useCallback(() => {
@@ -541,8 +548,10 @@ const MessageBubble = ({
       ).trim()
     : trimmedContent;
   const mockImageDescription = parseMockImageContent(trimmedContent);
+  const mockVoicePayload = parseMockVoiceContent(trimmedContent);
   const isMockImageMessage = Boolean(mockImageDescription);
-  const showCompactContent = hasStickers || isMockImageMessage;
+  const isMockVoiceMessage = Boolean(mockVoicePayload);
+  const showCompactContent = hasStickers || isMockImageMessage || isMockVoiceMessage;
 
   const bubble = (
     <div
@@ -581,6 +590,42 @@ const MessageBubble = ({
               <span className="text-xs opacity-70">点击查看描述</span>
             </>
           )}
+        </button>
+      ) : isMockVoiceMessage && mockVoicePayload ? (
+        <button
+          type="button"
+          onClick={() => setVoiceRevealed((prev) => !prev)}
+          className={`flex w-full flex-col rounded-2xl ${
+            isSelf
+              ? 'text-slate-900'
+              : 'text-white'
+          } transition hover:${voiceRevealed ? 'gap-3 text-left' : 'text-center'}`}
+        >
+          <div
+            className={`flex w-full items-center gap-3 px-1 ${
+              voiceRevealed ? 'justify-between border-b border-dashed border-current pb-1' : 'justify-center'
+            }`}
+          >
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded-xl ${
+                isSelf ? 'text-slate-900' : 'text-white'
+              }`}
+            >
+              <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+                <use xlinkHref="#icon-saying" />
+              </svg>
+            </span>
+            <span className="text-base tabular-nums">{mockVoicePayload.durationSeconds}s</span>
+          </div>
+          {voiceRevealed ? (
+            <p
+              className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${
+                isSelf ? 'text-slate-900' : 'text-white/90'
+              }`}
+            >
+              {mockVoicePayload.transcript}
+            </p>
+          ) : null}
         </button>
       ) : hasStickers ? (
         <div className="flex flex-col items-center gap-2">
@@ -681,6 +726,9 @@ const ChatApp = () => {
   const [isMockImageModalOpen, setIsMockImageModalOpen] = useState(false);
   const [mockImageDescription, setMockImageDescription] = useState('');
   const [isSendingMockImage, setIsSendingMockImage] = useState(false);
+  const [isMockVoiceModalOpen, setIsMockVoiceModalOpen] = useState(false);
+  const [mockVoiceContent, setMockVoiceContent] = useState('');
+  const [isSendingMockVoice, setIsSendingMockVoice] = useState(false);
   const [isStickerModalOpen, setIsStickerModalOpen] = useState(false);
   const [stickerModalTab, setStickerModalTab] = useState<'single' | 'batch'>('single');
   const [stickerLabelInput, setStickerLabelInput] = useState('');
@@ -751,6 +799,16 @@ const ChatApp = () => {
   const openMockImageModal = useCallback(() => {
     setMockImageDescription('');
     setIsMockImageModalOpen(true);
+  }, []);
+
+  const closeMockVoiceModal = useCallback(() => {
+    setIsMockVoiceModalOpen(false);
+    setMockVoiceContent('');
+  }, []);
+
+  const openMockVoiceModal = useCallback(() => {
+    setMockVoiceContent('');
+    setIsMockVoiceModalOpen(true);
   }, []);
 
   const releaseBatchPreviewUrls = useCallback((items: BatchUploadItem[]) => {
@@ -1228,6 +1286,34 @@ const ChatApp = () => {
     }
   }, [activeThread, contactId, mockImageDescription, closeMockImageModal]);
 
+  const handleSendMockVoice = useCallback(async () => {
+    if (!activeThread || !contactId) {
+      setError('请选择会话后再发送语音消息');
+      return;
+    }
+    const transcript = mockVoiceContent.trim();
+    if (transcript.length === 0) {
+      return;
+    }
+    setError(null);
+    try {
+      setIsSendingMockVoice(true);
+      await persistMessage({
+        threadId: activeThread.id,
+        role: 'user',
+        content: buildMockVoiceContent(transcript)
+      });
+      closeMockVoiceModal();
+      setShowMoreOptions(false);
+    } catch (err) {
+      const messageText =
+        err instanceof Error ? err.message : '发送语音消息失败，请稍后重试';
+      setError(messageText);
+    } finally {
+      setIsSendingMockVoice(false);
+    }
+  }, [activeThread, contactId, mockVoiceContent, closeMockVoiceModal]);
+
   const messages = useLiveQuery<Message[]>(
     async () => {
       if (!contactId || !activeThread) {
@@ -1569,6 +1655,14 @@ const ChatApp = () => {
   const hasPendingUserMessages = Boolean(latestPendingUserKey);
   const trimmedInputValue = inputValue.trim();
   const trimmedMockImageDescription = mockImageDescription.trim();
+  const trimmedMockVoiceContent = mockVoiceContent.trim();
+  const estimatedMockVoiceDuration = useMemo(
+    () =>
+      trimmedMockVoiceContent.length > 0
+        ? estimateVoiceDurationSeconds(trimmedMockVoiceContent)
+        : 0,
+    [trimmedMockVoiceContent]
+  );
   const hasApiKey = settings.apiKey.trim().length > 0;
   const canSummarizeLongMemory =
     Boolean(activeThread && messages && messages.length > 0 && hasApiKey);
@@ -2356,6 +2450,18 @@ const ChatApp = () => {
                       </svg>
                       <span className="sr-only">模拟图片</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={openMockVoiceModal}
+                      disabled={!activeThread}
+                      className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-xs transition hover:border-white/40 hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      title="语音"
+                    >
+                      <svg aria-hidden="true" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                        <use xlinkHref="#icon-maikefeng" />
+                      </svg>
+                      <span className="sr-only">语音</span>
+                    </button>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3">
@@ -2802,6 +2908,54 @@ const ChatApp = () => {
                 className="flex-1 rounded-2xl bg-cyan-400/90 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-300/40 disabled:text-slate-600"
               >
                 {isSendingMockImage ? '发送中...' : '确认'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isMockVoiceModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8"
+          onClick={closeMockVoiceModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900/95 p-5 text-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <label className="block text-sm text-white/80">
+              语音内容
+              <textarea
+                value={mockVoiceContent}
+                onChange={(event) => setMockVoiceContent(event.target.value)}
+                rows={3}
+                placeholder="输入语音内容"
+                className="mt-2 w-full resize-none rounded-2xl border border-white/15 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
+                autoFocus
+              />
+            </label>
+            {trimmedMockVoiceContent.length > 0 ? (
+              <p className="mt-3 text-xs text-white/60">
+                预计语音时长：{estimatedMockVoiceDuration} 秒
+              </p>
+            ) : null}
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={closeMockVoiceModal}
+                className="flex-1 rounded-2xl border border-white/20 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleSendMockVoice}
+                disabled={trimmedMockVoiceContent.length === 0 || isSendingMockVoice}
+                className="flex-1 rounded-2xl bg-cyan-400/90 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-cyan-300/40 disabled:text-slate-600"
+              >
+                {isSendingMockVoice ? '发送中...' : '确认'}
               </button>
             </div>
           </div>
