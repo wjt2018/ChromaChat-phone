@@ -14,7 +14,7 @@ import {
   TOKEN_LIMIT_STEP,
   AUTO_REPLY_DELAY_OPTIONS
 } from '../../services/chatService';
-import { Contact } from '../../services/db';
+import { Contact, ContactInteractionMode } from '../../services/db';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { CONTACT_ICON_OPTIONS, ContactIconName } from '../../constants/icons';
 import { ContactAvatar, UserAvatar, UserProfile } from './AvatarComponents';
@@ -47,6 +47,7 @@ type ContactDetailsModalProps = {
     tokenLimit: number;
     autoReplyEnabled: boolean;
     autoReplyDelayMinutes?: number;
+    interactionMode: ContactInteractionMode;
   }) => Promise<void>;
   onDelete: () => Promise<void>;
 };
@@ -90,6 +91,9 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(contact.autoReplyEnabled ?? false);
   const [autoReplyDelay, setAutoReplyDelay] = useState<AutoReplyDelayOption>(() =>
     normalizeAutoReplyDelayOption(contact.autoReplyDelayMinutes)
+  );
+  const [interactionMode, setInteractionMode] = useState<ContactInteractionMode>(
+    contact.interactionMode ?? 'online'
   );
 
   const trimmedAvatarUrl = avatarUrl.trim();
@@ -169,6 +173,10 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
     setAutoReplyDelay(normalizeAutoReplyDelayOption(contact.autoReplyDelayMinutes));
   }, [contact.autoReplyDelayMinutes, contact.autoReplyEnabled, contact.id]);
 
+  useEffect(() => {
+    setInteractionMode(contact.interactionMode ?? 'online');
+  }, [contact.id, contact.interactionMode]);
+
   const resolvedTokenLimit = useMemo(
     () => snapToTokenStep(tokenLimitInput),
     [tokenLimitInput]
@@ -213,7 +221,8 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
         selfAvatarColor: isSelfAvatarColorCustom ? selfAvatarColor : undefined,
         tokenLimit: resolvedTokenLimit,
         autoReplyEnabled,
-        autoReplyDelayMinutes: autoReplyEnabled ? autoReplyDelay : undefined
+        autoReplyDelayMinutes: autoReplyEnabled ? autoReplyDelay : undefined,
+        interactionMode
       });
       onClose();
     } catch (err) {
@@ -357,6 +366,35 @@ const ContactDetailsModal = ({ contact, tokenStats, onClose, onSave, onDelete }:
             placeholder="记录角色的常用信息、事件和背景。"
           />
         </label>
+
+        <section className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">互动模式</h3>
+              <p className="text-xs text-white/60">设定当前与该角色的聊天氛围</p>
+            </div>
+            <div className="flex gap-2">
+              {(['online', 'offline'] as ContactInteractionMode[]).map((mode) => {
+                const isActive = interactionMode === mode;
+                return (
+                  <button
+                    type="button"
+                    key={mode}
+                    onClick={() => setInteractionMode(mode)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                      isActive
+                        ? 'bg-white/80 text-slate-900 shadow-white/40'
+                        : 'border border-white/20 text-white/70 hover:border-white/40 hover:bg-white/10'
+                    }`}
+                    aria-pressed={isActive}
+                  >
+                    {mode === 'online' ? '线上' : '线下'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </section>
 
         <label className="block text-sm text-white/70">
           对话上下文 Token 上限

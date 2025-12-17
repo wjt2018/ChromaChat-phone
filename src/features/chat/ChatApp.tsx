@@ -11,7 +11,7 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { db, Contact, Message, StickerRecord } from '../../services/db';
+import { db, Contact, Message, StickerRecord, ContactInteractionMode } from '../../services/db';
 import {
   buildChatPayload,
   createContact,
@@ -47,13 +47,27 @@ const randomColor = () => {
   return palette[Math.floor(Math.random() * palette.length)];
 };
 
-const splitAssistantResponse = (content: string): string[] => {
+const splitAssistantResponse = (
+  content: string,
+  options?: { mode?: 'default' | 'offline' }
+): string[] => {
   const normalized = content.replace(/\r\n/g, '\n').trim();
   if (normalized.length === 0) {
     return [];
   }
 
-  const sentenceRegex = /[^。！？!?；;]+[。！？!?；;]?/g;
+  const mode = options?.mode ?? 'default';
+  if (mode === 'offline') {
+    const offlineBlocks = normalized
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter(Boolean);
+    if (offlineBlocks.length > 0) {
+      return offlineBlocks.slice(0, 4);
+    }
+  }
+
+  const sentenceRegex = /[^\u3002\uFF01\uFF1F?!]+[\u3002\uFF01\uFF1F?!]?/g;
   const sentences: string[] = [];
   const paragraphs = normalized.split(/\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
 
@@ -70,6 +84,10 @@ const splitAssistantResponse = (content: string): string[] => {
       sentences.push(paragraph);
     }
   });
+
+  if (mode === 'offline' && sentences.length > 4) {
+    return sentences.slice(0, 4);
+  }
 
   return sentences;
 };
@@ -552,6 +570,55 @@ const MessageBubble = ({
   const isMockImageMessage = Boolean(mockImageDescription);
   const isMockVoiceMessage = Boolean(mockVoicePayload);
   const showCompactContent = hasStickers || isMockImageMessage || isMockVoiceMessage;
+  const isOfflineAssistant = !isSelf && contact?.interactionMode === 'offline';
+
+  const renderRichText = (text: string, extraClass = '') => {
+    const baseClass = ['whitespace-pre-wrap break-words', extraClass].filter(Boolean).join(' ');
+    if (!isOfflineAssistant) {
+      return <span className={baseClass}>{text}</span>;
+    }
+
+    const parenthesesRegex = /(\([^)]*\)|（[^）]*）)/g;
+    const segments: Array<{ text: string; type: 'action' | 'speech' }> = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = parenthesesRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({
+          text: text.slice(lastIndex, match.index),
+          type: 'speech'
+        });
+      }
+      segments.push({
+        text: match[0] ?? '',
+        type: 'action'
+      });
+      lastIndex = match.index + (match[0]?.length ?? 0);
+    }
+    if (lastIndex < text.length) {
+      segments.push({
+        text: text.slice(lastIndex),
+        type: 'speech'
+      });
+    }
+
+    if (segments.length === 0) {
+      return <span className={baseClass}>{text}</span>;
+    }
+
+    return (
+      <span className={baseClass}>
+        {segments.map((segment, index) => (
+          <span
+            key={`${segment.type}-${index}`}
+            className={segment.type === 'speech' ? undefined : 'text-white/70'}
+          >
+            {segment.text}
+          </span>
+        ))}
+      </span>
+    );
+  };
 
   const bubble = (
     <div
@@ -640,13 +707,11 @@ const MessageBubble = ({
             />
           ))}
           {textWithoutStickers.length > 0 ? (
-            <span className="block whitespace-pre-wrap break-words text-xs text-white/80">
-              {textWithoutStickers}
-            </span>
+            renderRichText(textWithoutStickers, 'block text-xs text-white/80')
           ) : null}
         </div>
       ) : (
-        message.content
+        renderRichText(message.content)
       )}
     </div>
   );
@@ -1788,7 +1853,12 @@ const ChatApp = () => {
       const response = await sendMessageToLLM({ threadId: activeThreadId });
       const normalizedResponse = response.trim();
       const isVoiceMessage = parseMockVoiceContent(normalizedResponse) !== null;
-      const segments = isVoiceMessage ? [] : splitAssistantResponse(normalizedResponse);
+      const isOfflineMode = activeContact?.interactionMode === 'offline';
+      const segments = isVoiceMessage
+        ? []
+        : splitAssistantResponse(normalizedResponse, {
+            mode: isOfflineMode ? 'offline' : 'default'
+          });
       const parts =
         segments.length > 0 || isVoiceMessage
           ? isVoiceMessage
@@ -1816,7 +1886,7 @@ const ChatApp = () => {
     } finally {
       setIsSending(false);
     }
-  }, [activeThreadId, contactId, settings.apiKey, clearAutoReplyTimer]);
+  }, [activeThreadId, contactId, settings.apiKey, clearAutoReplyTimer, activeContact?.interactionMode]);
 
   useEffect(() => {
     clearAutoReplyTimer();
@@ -2119,6 +2189,7 @@ const ChatApp = () => {
     tokenLimit: number;
     autoReplyEnabled: boolean;
     autoReplyDelayMinutes?: number;
+    interactionMode: ContactInteractionMode;
   }) => {
     if (!contactId) {
       return;

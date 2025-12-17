@@ -1,4 +1,4 @@
-import { db, Message, MessageRole, Thread, Contact } from './db';
+import { db, Message, MessageRole, Thread, Contact, ContactInteractionMode } from './db';
 import { chatCompletion, ChatMessage } from './llmClient';
 import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
 import { ContactIconName, getRandomContactIcon } from '../constants/icons';
@@ -71,6 +71,17 @@ const buildSystemPromptContent = (
     `Name: ${effectiveUserName}`,
     `Persona: ${effectiveUserPrompt}`
   );
+
+  const interactionMode: ContactInteractionMode = contact.interactionMode ?? 'online';
+  if (interactionMode === 'offline') {
+    sections.push(
+      '',
+      'Offline interaction guidelines (IMPORTANT):',
+      '- Assume you and the user are interacting together in real life. React to the shared physical environment.',
+      '- Describe physical actions and inner thoughts wrapped in parentheses, e.g. (她轻轻捏了捏你的指尖) or (心想：今晚一定要把话说清楚)。',
+      '- Keep parentheses snippets concise and evocative, and keep spoken dialogue outside the parentheses.'
+    );
+  }
 
   if (stickers.length > 0) {
     sections.push(
@@ -191,6 +202,7 @@ export const createContact = async ({
     prompt,
     worldBook: worldBook ?? '',
     tokenLimit: DEFAULT_TOKEN_LIMIT,
+    interactionMode: 'online',
     createdAt: Date.now()
   };
 
@@ -228,6 +240,7 @@ export const updateContact = async (
       | 'tokenLimit'
       | 'autoReplyEnabled'
       | 'autoReplyDelayMinutes'
+      | 'interactionMode'
     >
   >
 ) => {
@@ -282,6 +295,11 @@ export const updateContact = async (
 
   if ('tokenLimit' in nextUpdates) {
     nextUpdates.tokenLimit = resolveTokenLimit(nextUpdates.tokenLimit);
+  }
+
+  if ('interactionMode' in nextUpdates) {
+    nextUpdates.interactionMode =
+      nextUpdates.interactionMode === 'offline' ? 'offline' : 'online';
   }
 
   await db.contacts.update(contactId, nextUpdates);

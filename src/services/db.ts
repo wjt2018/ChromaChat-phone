@@ -1,6 +1,8 @@
 import Dexie, { Table } from 'dexie';
 import { CUSTOM_STICKERS, type CustomSticker } from '../constants/customStickers';
 
+export type ContactInteractionMode = 'online' | 'offline';
+
 export type MessageRole = 'system' | 'user' | 'assistant';
 
 export interface Contact {
@@ -20,6 +22,7 @@ export interface Contact {
   tokenLimit?: number;
   autoReplyEnabled?: boolean;
   autoReplyDelayMinutes?: number;
+  interactionMode?: ContactInteractionMode;
   createdAt: number;
 }
 
@@ -93,6 +96,22 @@ class ChromaDatabase extends Dexie {
         if (count === 0) {
           await stickersTable.bulkAdd(buildDefaultStickerRecords());
         }
+      });
+    this.version(4)
+      .stores({
+        contacts: '&id, name, createdAt',
+        threads: '&id, contactId, updatedAt',
+        messages: '++id, threadId, createdAt',
+        settings: '&key',
+        stickers: '&url, createdAt'
+      })
+      .upgrade(async (transaction) => {
+        const contactsTable = transaction.table<Contact>('contacts');
+        await contactsTable.toCollection().modify((contact) => {
+          if (!contact.interactionMode) {
+            contact.interactionMode = 'online';
+          }
+        });
       });
   }
 }
