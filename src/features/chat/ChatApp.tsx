@@ -11,7 +11,14 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { db, Contact, Message, StickerRecord, ContactInteractionMode } from '../../services/db';
+import {
+  db,
+  Contact,
+  Message,
+  StickerRecord,
+  ContactInteractionMode,
+  GroupMember
+} from '../../services/db';
 import {
   buildChatPayload,
   createContact,
@@ -41,6 +48,7 @@ import {
   estimateVoiceDurationSeconds,
   parseMockVoiceContent
 } from '../../constants/mockVoice';
+import { chatCompletion } from '../../services/llmClient';
 
 const randomColor = () => {
   const palette = ['#38bdf8', '#f472b6', '#34d399', '#f59e0b', '#a855f7', '#ef4444', '#fb7185'];
@@ -161,7 +169,8 @@ type ContactSidebarProps = {
   contacts: Contact[];
   activeContactId?: string;
   onSelect: (id: string) => void;
-  onCreate: () => void;
+  onCreateContact: () => void;
+  onCreateGroup: () => void;
 };
 
 type MessageActionTarget = {
@@ -182,6 +191,71 @@ type BatchUploadItem = {
   label: string;
   file: File;
   previewUrl: string;
+};
+
+type ParsedGroupReplySegment = {
+  key: string;
+  name: string;
+  text: string;
+  member?: GroupMember;
+};
+
+const normalizeGroupMemberName = (value: string) => value.replace(/[【】]/g, '').trim();
+const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+
+const parseGroupAssistantMessage = (
+  content: string,
+  members: GroupMember[]
+): ParsedGroupReplySegment[] => {
+  const normalizedContent = content.replace(/\r\n/g, '\n').trim();
+  if (!normalizedContent) {
+    return [];
+  }
+  const normalizedMembers = members.map((member) => ({
+    member,
+    normalized: normalizeGroupMemberName(member.name).replace(/\s+/g, '').toLowerCase()
+  }));
+  const matchMember = (name: string) => {
+    const normalized = normalizeGroupMemberName(name).replace(/\s+/g, '').toLowerCase();
+    return (
+      normalizedMembers.find((entry) => entry.normalized === normalized) ||
+      normalizedMembers.find((entry) => normalized.includes(entry.normalized)) ||
+      undefined
+    );
+  };
+  const paragraphs = normalizedContent
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const segments: Array<{ name: string; text: string }> = [];
+  paragraphs.forEach((paragraph) => {
+    const match = paragraph.match(/^([^：:\n]+)[：:]\s*([\s\S]*)$/);
+    if (match) {
+      segments.push({
+        name: match[1] ? normalizeGroupMemberName(match[1]) : '群成员',
+        text: (match[2] ?? '').trim()
+      });
+      return;
+    }
+    if (segments.length === 0) {
+      segments.push({
+        name: '群成员',
+        text: paragraph
+      });
+      return;
+    }
+    const last = segments[segments.length - 1];
+    last.text = last.text ? `${last.text}\n\n${paragraph}` : paragraph;
+  });
+  return segments.map((segment, index) => {
+    const matched = matchMember(segment.name);
+    return {
+      key: matched?.member.id ?? `${segment.name}-${index}`,
+      name: segment.name,
+      text: segment.text.trim(),
+      member: matched?.member
+    };
+  });
 };
 
 const sanitizeLabel = (value: string, fallback: string) => {
@@ -218,16 +292,30 @@ const isValidExternalUrl = (value: string) => {
   }
 };
 
-const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: ContactSidebarProps) => (
+const ContactSidebar = ({
+  contacts,
+  activeContactId,
+  onSelect,
+  onCreateContact,
+  onCreateGroup
+}: ContactSidebarProps) => (
   <aside className="hidden h-full w-80 flex-none flex-col gap-4 border-r border-white/10 bg-white/5 p-6 shadow-inner shadow-black/10 backdrop-blur-xl sm:flex lg:w-96">
-    <div className="flex items-center justify-between">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <h2 className="text-sm font-semibold text-white/80">联系人</h2>
-      <button
-        onClick={onCreate}
-        className="rounded-full border border-dashed border-white/30 px-3 py-1 text-xs text-white/70 transition hover:border-white/60 hover:bg-white/20"
-      >
-        + 新建
-      </button>
+      <div className="flex flex-wrap justify-end gap-2">
+        <button
+          onClick={onCreateGroup}
+          className="rounded-full border border-dashed border-white/30 px-3 py-1 text-xs text-white/70 transition hover:border-white/60 hover:bg-white/20"
+        >
+          + 新建群聊
+        </button>
+        <button
+          onClick={onCreateContact}
+          className="rounded-full border border-dashed border-white/30 px-3 py-1 text-xs text-white/70 transition hover:border-white/60 hover:bg-white/20"
+        >
+          + 新建角色
+        </button>
+      </div>
     </div>
     <div className="flex-1 space-y-3 overflow-y-auto pb-4">
       {contacts.map((contact) => {
@@ -257,10 +345,16 @@ const ContactSidebar = ({ contacts, activeContactId, onSelect, onCreate }: Conta
 type ContactListScreenProps = {
   contacts: Contact[];
   onSelect: (id: string) => void;
-  onCreate: () => void;
+  onCreateContact: () => void;
+  onCreateGroup: () => void;
 };
 
-const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenProps) => (
+const ContactListScreen = ({
+  contacts,
+  onSelect,
+  onCreateContact,
+  onCreateGroup
+}: ContactListScreenProps) => (
   <div className="flex min-h-screen flex-col bg-gradient-to-br from-white/10 via-white/5 to-white/10">
     <header className="flex items-center justify-between border-b border-white/10 bg-white/10 px-5 py-4">
       <Link
@@ -273,12 +367,20 @@ const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenPr
         </svg>
         <span className="sr-only">返回主屏</span>
       </Link>
-      <button
-        onClick={onCreate}
-        className="rounded-full border border-dashed border-white/30 px-4 py-2 text-sm font-medium text-white/80 transition hover:border-white/60 hover:bg-white/20"
-      >
-        + 新建角色
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={onCreateGroup}
+          className="rounded-full border border-dashed border-white/30 px-4 py-2 text-sm font-medium text-white/80 transition hover:border-white/60 hover:bg-white/20"
+        >
+          + 新建群聊
+        </button>
+        <button
+          onClick={onCreateContact}
+          className="rounded-full border border-dashed border-white/30 px-4 py-2 text-sm font-medium text-white/80 transition hover:border-white/60 hover:bg-white/20"
+        >
+          + 新建角色
+        </button>
+      </div>
     </header>
 
     <section className="flex-1 space-y-3 overflow-y-auto px-4 py-6 sm:px-6">
@@ -308,19 +410,69 @@ const ContactListScreen = ({ contacts, onSelect, onCreate }: ContactListScreenPr
   </div>
 );
 
-const NewContactForm = ({
+type CreateModalVariant = 'contact' | 'group';
+
+const CREATE_MODAL_COPY: Record<
+  CreateModalVariant,
+  {
+    title: string;
+    nameLabel: string;
+    namePlaceholder: string;
+    promptLabel: string;
+    promptPlaceholder: string;
+    submitLabel: string;
+    submittingLabel: string;
+    emptyNameError: string;
+    previewName: string;
+  }
+> = {
+  contact: {
+    title: '创建新的 AI 角色',
+    nameLabel: '角色姓名',
+    namePlaceholder: '例如：阿黎',
+    promptLabel: '人设描述',
+    promptPlaceholder: '介绍角色的性格、说话方式、背景故事等',
+    submitLabel: '创建角色',
+    submittingLabel: '创建中...',
+    emptyNameError: '请填写角色姓名',
+    previewName: '新角色'
+  },
+  group: {
+    title: '创建新的群聊',
+    nameLabel: '群聊名称',
+    namePlaceholder: '例如：周末小组讨论',
+    promptLabel: '群聊规则',
+    promptPlaceholder: '例如：固定话题、禁言规则或其他说明',
+    submitLabel: '创建群聊',
+    submittingLabel: '创建中...',
+    emptyNameError: '请填写群聊名称',
+    previewName: '新群聊'
+  }
+};
+
+type CreateContactPayload = {
+  name: string;
+  prompt: string;
+  avatarColor: string;
+  avatarIcon: ContactIconName;
+  avatarUrl?: string;
+  type?: 'single' | 'group';
+  groupMembers?: GroupMember[];
+};
+
+const CreateChatTargetModal = ({
+  variant,
   onSubmit,
-  onClose
+  onClose,
+  contacts
 }: {
-  onSubmit: (values: {
-    name: string;
-    prompt: string;
-    avatarColor: string;
-    avatarIcon: ContactIconName;
-    avatarUrl?: string;
-  }) => Promise<void>;
+  variant: CreateModalVariant;
+  onSubmit: (values: CreateContactPayload) => Promise<void>;
   onClose: () => void;
+  contacts: Contact[];
 }) => {
+  const copy = CREATE_MODAL_COPY[variant];
+  const isGroupVariant = variant === 'group';
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [avatarColor, setAvatarColor] = useState(randomColor());
@@ -328,11 +480,22 @@ const NewContactForm = ({
   const [avatarUrl, setAvatarUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
+  const [isExistingPickerOpen, setIsExistingPickerOpen] = useState(false);
+  const [isAiFormOpen, setIsAiFormOpen] = useState(false);
+  const [aiDirection, setAiDirection] = useState('');
+  const [isGeneratingMember, setIsGeneratingMember] = useState(false);
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const llmSettings = useSettingsStore((state) => ({
+    baseUrl: state.baseUrl,
+    apiKey: state.apiKey,
+    model: state.model
+  }));
 
   const trimmedAvatarUrl = avatarUrl.trim();
   const previewContact = {
     id: 'preview',
-    name: name || '新角色',
+    name: name || copy.previewName,
     avatarColor,
     avatarIcon,
     avatarUrl: trimmedAvatarUrl || undefined,
@@ -340,11 +503,138 @@ const NewContactForm = ({
     worldBook: '',
     createdAt: Date.now()
   } as Contact;
+  const selectableContacts = useMemo(
+    () => contacts.filter((contact) => (contact.type ?? 'single') !== 'group'),
+    [contacts]
+  );
+  const addedExistingIds = useMemo(() => {
+    const ids = new Set<string>();
+    groupMembers.forEach((member) => {
+      if (member.originContactId) {
+        ids.add(member.originContactId);
+      }
+    });
+    return ids;
+  }, [groupMembers]);
+
+  useEffect(() => {
+    if (!isGroupVariant && groupMembers.length > 0) {
+      setGroupMembers([]);
+    }
+  }, [isGroupVariant, groupMembers.length]);
+
+  const handleAddExistingContact = useCallback(
+    (contact: Contact) => {
+      if (addedExistingIds.has(contact.id)) {
+        return;
+      }
+      const member: GroupMember = {
+        id: crypto.randomUUID(),
+        name: contact.name,
+        prompt: contact.prompt || '未设置人设',
+        avatarColor: contact.avatarColor,
+        avatarIcon: contact.avatarIcon,
+        avatarUrl: contact.avatarUrl,
+        originContactId: contact.id,
+        source: 'existing'
+      };
+      setGroupMembers((prev) => [...prev, member]);
+    },
+    [addedExistingIds]
+  );
+
+  const handleRemoveMember = useCallback((memberId: string) => {
+    setGroupMembers((prev) => prev.filter((member) => member.id !== memberId));
+  }, []);
+
+  const parseGeneratedMember = (content: string) => {
+    const match = content.match(/\{[\s\S]*\}/);
+    const payloadText = match ? match[0] : content;
+    return JSON.parse(payloadText);
+  };
+
+  const handleGenerateMember = useCallback(async () => {
+    if (isGeneratingMember) {
+      return;
+    }
+    if (!llmSettings.apiKey.trim()) {
+      setMemberError('请先在“设置”页面填写 API Key。');
+      return;
+    }
+    setIsGeneratingMember(true);
+    setMemberError(null);
+    try {
+      const direction = aiDirection.trim();
+      const existingNames = groupMembers.map((member) => member.name);
+      const requestLines = [
+        '请设计一位中文群聊角色，返回 JSON 对象，字段包括 "name" 和 "persona"（第一人称或第三人称设定，30~80字）。',
+        '角色需要用中文回复，保留独特的语气和身份背景。',
+        direction.length > 0 ? `角色方向：${direction}` : '若无方向可自行发挥。'
+      ];
+      if (existingNames.length > 0) {
+        requestLines.push(`当前已存在的角色：${existingNames.join('、')}。避免与他们重名或人设重复。`);
+      }
+      const { content } = await chatCompletion({
+        baseUrl: llmSettings.baseUrl,
+        apiKey: llmSettings.apiKey,
+        model: llmSettings.model,
+        temperature: 0.9,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a creative writer who only outputs valid JSON without additional text.'
+          },
+          {
+            role: 'user',
+            content: requestLines.filter(Boolean).join('\n')
+          }
+        ]
+      });
+      const parsed = parseGeneratedMember(content);
+      const memberName =
+        typeof parsed.name === 'string' && parsed.name.trim().length > 0
+          ? parsed.name.trim()
+          : `新成员${groupMembers.length + 1}`;
+      const persona =
+        typeof parsed.persona === 'string' && parsed.persona.trim().length > 0
+          ? parsed.persona.trim()
+          : '保持神秘、随机发挥。';
+      const member: GroupMember = {
+        id: crypto.randomUUID(),
+        name: memberName,
+        prompt: persona,
+        avatarColor: randomColor(),
+        avatarIcon: getRandomContactIcon(),
+        source: 'generated'
+      };
+      setGroupMembers((prev) => [...prev, member]);
+      setAiDirection('');
+      setIsAiFormOpen(false);
+    } catch (generationError) {
+      setMemberError(
+        generationError instanceof Error ? generationError.message : '生成角色失败，请稍后重试。'
+      );
+    } finally {
+      setIsGeneratingMember(false);
+    }
+  }, [
+    aiDirection,
+    groupMembers,
+    isGeneratingMember,
+    llmSettings.apiKey,
+    llmSettings.baseUrl,
+    llmSettings.model
+  ]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!name.trim()) {
-      setError('请填写角色姓名');
+      setError(copy.emptyNameError);
+      return;
+    }
+    if (isGroupVariant && groupMembers.length < 2) {
+      setError('请至少添加 2 位群成员');
       return;
     }
     setIsSubmitting(true);
@@ -355,7 +645,9 @@ const NewContactForm = ({
         prompt: prompt.trim(),
         avatarColor,
         avatarIcon,
-        avatarUrl: avatarUrl.trim() || undefined
+        avatarUrl: avatarUrl.trim() || undefined,
+        type: isGroupVariant ? 'group' : 'single',
+        groupMembers: isGroupVariant ? groupMembers : undefined
       });
       onClose();
     } catch (err) {
@@ -366,29 +658,29 @@ const NewContactForm = ({
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm px-4">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm px-4 py-6 overflow-y-auto">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-4 rounded-3xl border border-white/15 bg-white/10 p-6 shadow-glass backdrop-blur-2xl"
+        className="w-full max-w-sm space-y-4 rounded-3xl border border-white/15 bg-white/10 p-6 shadow-glass backdrop-blur-2xl max-h-[90vh] overflow-y-auto"
       >
-        <h2 className="text-lg font-semibold text-white">创建新的 AI 角色</h2>
+        <h2 className="text-lg font-semibold text-white">{copy.title}</h2>
         <label className="block text-sm text-white/70">
-          角色姓名
+          {copy.nameLabel}
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
             className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
-            placeholder="例如：阿黎"
+            placeholder={copy.namePlaceholder}
           />
         </label>
         <label className="block text-sm text-white/70">
-          人设描述
+          {copy.promptLabel}
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             rows={4}
             className="mt-1 w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-white outline-none transition focus:border-white/40 focus:bg-white/15"
-            placeholder="介绍角色的性格、说话方式、背景故事等"
+            placeholder={copy.promptPlaceholder}
           />
         </label>
         <label className="block text-sm text-white/70">
@@ -429,6 +721,150 @@ const NewContactForm = ({
           />
         </label>
 
+        {isGroupVariant ? (
+          <section className="space-y-3 rounded-3xl border border-white/10 bg-white/5 p-4">
+            <div className="flex flex-col gap-1">
+              <h3 className="text-sm font-semibold text-white">群成员</h3>
+              <p className="text-xs text-white/70">
+                已添加 {groupMembers.length} 位。可从已有角色中挑选，或由 AI 生成新角色。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {groupMembers.map((member) => (
+                <div
+                  key={member.id}
+                  className="w-full rounded-2xl border border-white/10 bg-white/10 p-3 text-left text-white sm:w-[calc(50%-0.375rem)]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold">{member.name}</p>
+                      <p className="mt-1 text-xs text-white/60 line-clamp-3">{member.prompt}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveMember(member.id)}
+                      className="rounded-full border border-white/20 px-2 py-1 text-xs text-white/70 transition hover:border-white/40 hover:bg-white/10"
+                    >
+                      移除
+                    </button>
+                  </div>
+                  <span className="mt-2 inline-flex items-center rounded-full border border-white/15 px-2 py-0.5 text-[11px] uppercase text-white/60">
+                    {member.source === 'existing' ? '已有角色' : 'AI 生成'}
+                  </span>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExistingPickerOpen((prev) => !prev);
+                  setIsAiFormOpen(false);
+                }}
+                className="flex min-h-[96px] flex-1 items-center justify-center rounded-2xl border border-dashed border-white/25 bg-white/5 px-3 py-4 text-center text-xs text-white/70 transition hover:border-white/50 hover:bg-white/10"
+              >
+                + 从已有角色添加
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAiFormOpen((prev) => !prev);
+                  setIsExistingPickerOpen(false);
+                  setMemberError(null);
+                }}
+                className="flex min-h-[96px] flex-1 items-center justify-center rounded-2xl border border-dashed border-white/25 bg-white/5 px-3 py-4 text-center text-xs text-white/70 transition hover:border-white/50 hover:bg-white/10"
+              >
+                + AI 生成角色
+              </button>
+            </div>
+
+            {isExistingPickerOpen ? (
+              <div className="space-y-3 rounded-2xl border border-white/10 bg-white/10 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-white/70">选择已有角色加入</p>
+                  <button
+                    type="button"
+                    onClick={() => setIsExistingPickerOpen(false)}
+                    className="text-xs text-white/60 hover:text-white"
+                  >
+                    收起
+                  </button>
+                </div>
+                {selectableContacts.length === 0 ? (
+                  <p className="text-xs text-white/50">暂时没有可用的角色。</p>
+                ) : (
+                  <div className="max-h-48 space-y-2 overflow-y-auto">
+                    {selectableContacts.map((contact) => {
+                      const disabled = addedExistingIds.has(contact.id);
+                      return (
+                        <div
+                          key={contact.id}
+                          className="flex items-start justify-between rounded-2xl border border-white/10 bg-white/5 p-3"
+                        >
+                          <div className="min-w-0 pr-3">
+                            <p className="text-sm font-semibold text-white">{contact.name}</p>
+                            <p className="mt-1 text-xs text-white/60 line-clamp-2">
+                              {contact.prompt || '未设置人设'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleAddExistingContact(contact)}
+                            disabled={disabled}
+                            className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/80 transition hover:border-white/40 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {disabled ? '已添加' : '添加'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {isAiFormOpen ? (
+              <div className="space-y-3 rounded-2xl border border-white/10 bg-white/10 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-white/70">AI 生成角色方向（可选）</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAiFormOpen(false);
+                      setMemberError(null);
+                    }}
+                    className="text-xs text-white/60 hover:text-white"
+                  >
+                    收起
+                  </button>
+                </div>
+                <textarea
+                  value={aiDirection}
+                  onChange={(event) => setAiDirection(event.target.value)}
+                  rows={3}
+                  placeholder="示例：阳光开朗的女大学生，擅长组织活动"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none transition focus:border-white/40 focus:bg-white/10"
+                />
+                {memberError ? (
+                  <p className="text-xs text-red-200">{memberError}</p>
+                ) : (
+                  <p className="text-xs text-white/50">
+                    若留空则完全随机生成；需要 API Key 才能调用 AI。
+                  </p>
+                )}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={handleGenerateMember}
+                    disabled={isGeneratingMember}
+                    className="flex-1 rounded-2xl bg-white/80 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-white/40"
+                  >
+                    {isGeneratingMember ? '生成中...' : '生成角色'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
 
         <div className="flex gap-3">
@@ -437,7 +873,7 @@ const NewContactForm = ({
             disabled={isSubmitting}
             className="flex-1 rounded-2xl bg-white/80 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-white/50"
           >
-            {isSubmitting ? '创建中...' : '创建角色'}
+            {isSubmitting ? copy.submittingLabel : copy.submitLabel}
           </button>
           <button
             type="button"
@@ -486,6 +922,7 @@ const MessageBubble = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [mockImageRevealed, setMockImageRevealed] = useState(false);
   const [voiceRevealed, setVoiceRevealed] = useState(false);
+  const groupMembers = contact?.type === 'group' ? contact.groupMembers ?? [] : [];
 
   useEffect(() => {
     setMockImageRevealed(false);
@@ -620,7 +1057,99 @@ const MessageBubble = ({
     );
   };
 
-  const bubble = (
+  const groupReplySegments = useMemo(() => {
+    if (message.role !== 'assistant' || groupMembers.length === 0) {
+      return null;
+    }
+    return parseGroupAssistantMessage(trimmedContent, groupMembers);
+  }, [groupMembers, message.role, trimmedContent]);
+  const hasGroupSegments = Boolean(groupReplySegments && groupReplySegments.length > 0);
+
+  const renderSegmentContent = (segmentText: string, keyPrefix: string) => {
+    const elements: React.ReactNode[] = [];
+    markdownImageRegex.lastIndex = 0;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = markdownImageRegex.exec(segmentText)) !== null) {
+      const [fullMatch, altRaw, urlRaw] = match;
+      const before = segmentText.slice(lastIndex, match.index).trim();
+      if (before.length > 0) {
+        elements.push(
+          <div key={`${keyPrefix}-text-${elements.length}`} className="text-sm leading-relaxed">
+            {renderRichText(before)}
+          </div>
+        );
+      }
+      const url = urlRaw?.trim();
+      if (url) {
+        const alt = altRaw?.trim().length ? altRaw.trim() : `image-${elements.length + 1}`;
+        elements.push(
+          <img
+            key={`${keyPrefix}-image-${elements.length}`}
+            src={url}
+            alt={alt}
+            className="mt-1 max-h-48 w-full rounded-2xl object-contain"
+            draggable={false}
+          />
+        );
+      } else if (fullMatch) {
+        elements.push(
+          <div key={`${keyPrefix}-text-${elements.length}`} className="text-sm leading-relaxed">
+            {renderRichText(fullMatch)}
+          </div>
+        );
+      }
+      lastIndex = match.index + fullMatch.length;
+    }
+    const remaining = segmentText.slice(lastIndex).trim();
+    if (remaining.length > 0 || elements.length === 0) {
+      elements.push(
+        <div key={`${keyPrefix}-text-${elements.length}`} className="text-sm leading-relaxed">
+          {renderRichText(remaining)}
+        </div>
+      );
+    }
+    return elements;
+  };
+
+  const bubble = hasGroupSegments ? (
+    <div className="flex flex-col gap-4 text-white">
+      {groupReplySegments!.map((segment) => {
+        const avatarContact = segment.member
+          ? ({
+              id: segment.member.id,
+              name: segment.member.name,
+              avatarColor: segment.member.avatarColor || '#38bdf8',
+              avatarIcon: segment.member.avatarIcon,
+              avatarUrl: segment.member.avatarUrl,
+              prompt: segment.member.prompt,
+              worldBook: '',
+              createdAt: segment.member.id.length
+            } as Contact)
+          : null;
+        const avatarNode = avatarContact ? (
+          <ContactAvatar contact={avatarContact} size="h-10 w-10" iconScale="h-1/2 w-1/2" />
+        ) : (
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-sm font-semibold text-white">
+            {segment.name.slice(0, 1)}
+          </div>
+        );
+        return (
+          <div key={segment.key} className="flex w-full gap-3">
+            <div className="flex w-16 flex-col items-center gap-1 text-center">
+              <span className="line-clamp-2 text-[11px] text-white/70">{segment.name}</span>
+              {avatarNode}
+            </div>
+            <div className="flex-1">
+              <div className="max-w-full space-y-2 rounded-3xl bg-white/15 px-4 py-3 text-white shadow-white/10 backdrop-blur-md">
+                {renderSegmentContent(segment.text, segment.key)}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  ) : (
     <div
       className={`max-w-xs rounded-3xl px-4 py-3 text-sm leading-relaxed shadow-lg transition sm:max-w-sm ${
         isSelf
@@ -716,11 +1245,15 @@ const MessageBubble = ({
     </div>
   );
 
-  const avatar = isSelf ? (
-    <UserAvatar profile={userProfile} size="h-9 w-9 sm:h-10 sm:w-10" />
-  ) : (
-    <AssistantAvatar contact={contact} size="h-9 w-9 sm:h-10 sm:w-10" />
-  );
+  const avatar = hasGroupSegments
+    ? null
+    : isSelf
+    ? (
+        <UserAvatar profile={userProfile} size="h-9 w-9 sm:h-10 sm:w-10" />
+      )
+    : (
+        <AssistantAvatar contact={contact} size="h-9 w-9 sm:h-10 sm:w-10" />
+      );
 
   return (
     <div className={`flex w-full ${isSelf ? 'justify-end' : 'justify-start'}`}>
@@ -783,7 +1316,7 @@ const ChatApp = () => {
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
-  const [showDialog, setShowDialog] = useState(false);
+  const [createModalVariant, setCreateModalVariant] = useState<CreateModalVariant | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [moreOptionsView, setMoreOptionsView] = useState<'default' | 'emoji'>('default');
@@ -806,6 +1339,15 @@ const ChatApp = () => {
   const [batchUrlInput, setBatchUrlInput] = useState('');
   const [remoteLabelOverrides, setRemoteLabelOverrides] = useState<Record<string, string>>({});
   const [isBatchSaving, setIsBatchSaving] = useState(false);
+  const handleOpenContactModal = useCallback(() => {
+    setCreateModalVariant('contact');
+  }, []);
+  const handleOpenGroupModal = useCallback(() => {
+    setCreateModalVariant('group');
+  }, []);
+  const handleCloseCreateModal = useCallback(() => {
+    setCreateModalVariant(null);
+  }, []);
 
   const settings = useSettingsStore();
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -2164,12 +2706,7 @@ const ChatApp = () => {
     }
   };
 
-  const handleCreateContact = async (payload: {
-    name: string;
-    prompt: string;
-    avatarColor: string;
-    avatarUrl?: string;
-  }) => {
+  const handleCreateContact = async (payload: CreateContactPayload) => {
     const { contact } = await createContact(payload);
     navigate(`/apps/chat/${contact.id}`);
   };
@@ -2202,20 +2739,25 @@ const ChatApp = () => {
     navigate('/apps/chat');
   };
 
+  const renderCreateModal = createModalVariant ? (
+    <CreateChatTargetModal
+      variant={createModalVariant}
+      onSubmit={handleCreateContact}
+      onClose={handleCloseCreateModal}
+      contacts={contacts ?? []}
+    />
+  ) : null;
+
   if (!contactId) {
     return (
       <>
         <ContactListScreen
           contacts={contacts ?? []}
           onSelect={handleSelectContact}
-          onCreate={() => setShowDialog(true)}
+          onCreateContact={handleOpenContactModal}
+          onCreateGroup={handleOpenGroupModal}
         />
-        {showDialog ? (
-          <NewContactForm
-            onSubmit={handleCreateContact}
-            onClose={() => setShowDialog(false)}
-          />
-        ) : null}
+        {renderCreateModal}
       </>
     );
   }
@@ -2227,7 +2769,8 @@ const ChatApp = () => {
           contacts={contacts ?? []}
           activeContactId={contactId}
           onSelect={handleSelectContact}
-          onCreate={() => setShowDialog(true)}
+          onCreateContact={handleOpenContactModal}
+          onCreateGroup={handleOpenGroupModal}
         />
 
         <section className="flex min-h-0 flex-1 flex-col bg-white/10 shadow-2xl shadow-black/20 backdrop-blur-2xl">
@@ -2693,6 +3236,8 @@ const ChatApp = () => {
           </footer>
         </section>
       </div>
+
+      {renderCreateModal}
 
       {isStickerModalOpen ? (
         <div

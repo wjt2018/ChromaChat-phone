@@ -1,4 +1,13 @@
-import { db, Message, MessageRole, Thread, Contact, ContactInteractionMode } from './db';
+import {
+  db,
+  Message,
+  MessageRole,
+  Thread,
+  Contact,
+  ContactInteractionMode,
+  ContactType,
+  GroupMember
+} from './db';
 import { chatCompletion, ChatMessage } from './llmClient';
 import { defaultSystemPrompt, useSettingsStore } from '../stores/settingsStore';
 import { ContactIconName, getRandomContactIcon } from '../constants/icons';
@@ -101,6 +110,30 @@ const buildSystemPromptContent = (
     }
   }
 
+  const contactType: ContactType = contact.type ?? 'single';
+  const groupMembers: GroupMember[] = Array.isArray(contact.groupMembers)
+    ? contact.groupMembers
+    : [];
+  const validMembers = groupMembers.filter((member) => member && sanitizeText(member.name).length);
+
+  if (contactType === 'group' && validMembers.length > 0) {
+    sections.push(
+      '',
+      'Group chat directive:',
+      '- You are roleplaying multiple characters in the same group chat with the user.',
+      '- Only the human user speaks for themselves. You must speak for every fictional participant listed below.',
+      '- Each reply must contain at least one character speaking. Never reply as the user.',
+      '- Each reply can include one or more characters. Skip characters that would realistically stay quiet.',
+      '- Every spoken line must follow the exact pattern “角色名：内容”. If multiple characters reply, place each on its own line using the same pattern.'
+    );
+    sections.push('', 'Group members (maintain their personas consistently):');
+    validMembers.forEach((member, index) => {
+      const memberName = sanitizeText(member.name) || `Member ${index + 1}`;
+      const memberPrompt = sanitizeText(member.prompt) || 'Not provided';
+      sections.push(`- ${memberName}: ${memberPrompt}`);
+    });
+  }
+
   sections.push(
     '',
     'Mock image guideline (always include as-is when needed):',
@@ -182,7 +215,9 @@ export const createContact = async ({
   avatarIcon,
   avatarUrl,
   prompt,
-  worldBook
+  worldBook,
+  type = 'single',
+  groupMembers
 }: {
   name: string;
   avatarColor: string;
@@ -190,8 +225,13 @@ export const createContact = async ({
   avatarUrl?: string;
   prompt: string;
   worldBook?: string;
+  type?: ContactType;
+  groupMembers?: GroupMember[];
 }) => {
   const iconName = avatarUrl ? undefined : avatarIcon ?? getRandomContactIcon();
+  const normalizedType: ContactType = type === 'group' ? 'group' : 'single';
+  const members =
+    normalizedType === 'group' && Array.isArray(groupMembers) ? groupMembers : undefined;
 
   const contact: Contact = {
     id: generateId(),
@@ -201,6 +241,8 @@ export const createContact = async ({
     avatarUrl,
     prompt,
     worldBook: worldBook ?? '',
+    type: normalizedType,
+    groupMembers: members,
     tokenLimit: DEFAULT_TOKEN_LIMIT,
     interactionMode: 'online',
     createdAt: Date.now()
@@ -235,12 +277,14 @@ export const updateContact = async (
       | 'selfAvatarColor'
       | 'selfAvatarIcon'
       | 'selfAvatarUrl'
-      | 'selfPrompt'
-      | 'longMemory'
-      | 'tokenLimit'
-      | 'autoReplyEnabled'
-      | 'autoReplyDelayMinutes'
-      | 'interactionMode'
+        | 'selfPrompt'
+        | 'longMemory'
+        | 'tokenLimit'
+        | 'autoReplyEnabled'
+        | 'autoReplyDelayMinutes'
+        | 'interactionMode'
+        | 'type'
+        | 'groupMembers'
     >
   >
 ) => {

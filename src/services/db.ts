@@ -2,6 +2,19 @@ import Dexie, { Table } from 'dexie';
 import { CUSTOM_STICKERS, type CustomSticker } from '../constants/customStickers';
 
 export type ContactInteractionMode = 'online' | 'offline';
+export type ContactType = 'single' | 'group';
+export type GroupMemberSource = 'existing' | 'generated';
+
+export interface GroupMember {
+  id: string;
+  name: string;
+  prompt: string;
+  avatarColor: string;
+  avatarIcon?: string;
+  avatarUrl?: string;
+  originContactId?: string;
+  source: GroupMemberSource;
+}
 
 export type MessageRole = 'system' | 'user' | 'assistant';
 
@@ -23,6 +36,8 @@ export interface Contact {
   autoReplyEnabled?: boolean;
   autoReplyDelayMinutes?: number;
   interactionMode?: ContactInteractionMode;
+  type?: ContactType;
+  groupMembers?: GroupMember[];
   createdAt: number;
 }
 
