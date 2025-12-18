@@ -201,7 +201,10 @@ type ParsedGroupReplySegment = {
 };
 
 const normalizeGroupMemberName = (value: string) => value.replace(/[【】]/g, '').trim();
-const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+const markdownImageRegex = /!?\s*\[([^\]]*)\]\s*\(([^)]+)\)/g;
+const standaloneMarkdownImageRegex = /^!\s*\[[^\]]*]\s*\([^)]+\)$/;
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const parseGroupAssistantMessage = (
   content: string,
@@ -215,6 +218,17 @@ const parseGroupAssistantMessage = (
     member,
     normalized: normalizeGroupMemberName(member.name).replace(/\s+/g, '').toLowerCase()
   }));
+  const patternSource = members
+    .map((member) => normalizeGroupMemberName(member.name))
+    .filter((name) => name.length > 0)
+    .map((name) => escapeRegExp(name))
+    .sort((a, b) => b.length - a.length);
+  const colonPattern = '[\\uFF1A:：﹕︰]';
+  const leadingWrapperPattern = '[@\\\\"“‘’「『（(【\\[]*';
+  const memberRegex =
+    patternSource.length > 0
+      ? new RegExp(`^${leadingWrapperPattern}(${patternSource.join('|')})${colonPattern}\\s*(.*)$`)
+      : null;
   const matchMember = (name: string) => {
     const normalized = normalizeGroupMemberName(name).replace(/\s+/g, '').toLowerCase();
     return (
@@ -223,30 +237,63 @@ const parseGroupAssistantMessage = (
       undefined
     );
   };
-  const paragraphs = normalizedContent
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
-  const segments: Array<{ name: string; text: string }> = [];
-  paragraphs.forEach((paragraph) => {
-    const match = paragraph.match(/^([^：:\n]+)[：:]\s*([\s\S]*)$/);
-    if (match) {
-      segments.push({
-        name: match[1] ? normalizeGroupMemberName(match[1]) : '群成员',
-        text: (match[2] ?? '').trim()
-      });
-      return;
-    }
-    if (segments.length === 0) {
-      segments.push({
+  if (!memberRegex) {
+    return [
+      {
+        key: `group-segment-0`,
         name: '群成员',
-        text: paragraph
-      });
+        text: normalizedContent,
+        member: undefined
+      }
+    ];
+  }
+  const segments: Array<{ name: string; text: string }> = [];
+  let activeSegment: { name: string; text: string } | null = null;
+  let pendingBlankLines = 0;
+  const lines = normalizedContent.split('\n');
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) {
+      if (activeSegment) {
+        pendingBlankLines += 1;
+      }
       return;
     }
-    const last = segments[segments.length - 1];
-    last.text = last.text ? `${last.text}\n\n${paragraph}` : paragraph;
+    const match = memberRegex ? line.match(memberRegex) : null;
+    if (match) {
+      const name = match[1] ? normalizeGroupMemberName(match[1]) : '群成员';
+      const text = (match[2] ?? '').trim();
+      const segment = { name, text };
+      segments.push(segment);
+      activeSegment = segment;
+      pendingBlankLines = 0;
+      return;
+    }
+    if (!activeSegment) {
+      activeSegment = {
+        name: '群成员',
+        text: line
+      };
+      segments.push(activeSegment);
+      pendingBlankLines = 0;
+      return;
+    }
+    const separator = pendingBlankLines > 0 ? '\n\n' : '\n';
+    activeSegment.text = activeSegment.text
+      ? `${activeSegment.text}${separator}${line}`
+      : line;
+    pendingBlankLines = 0;
   });
+  if (segments.length === 0) {
+    return [
+      {
+        key: `group-segment-0`,
+        name: '群成员',
+        text: normalizedContent,
+        member: undefined
+      }
+    ];
+  }
   return segments.map((segment, index) => {
     const matched = matchMember(segment.name);
     return {
@@ -256,6 +303,109 @@ const parseGroupAssistantMessage = (
       member: matched?.member
     };
   });
+};
+const sentenceSegmentRegex = /[^\u3002\uFF01\uFF1F?!]+[\u3002\uFF01\uFF1F?!]?/g;
+
+const QUOTE_PAIRS: Array<[string, string]> = [
+  ['“', '”'],
+  ['「', '」'],
+  ['『', '』'],
+  ['《', '》'],
+  ['〈', '〉'],
+  ['‘', '’'],
+  ['"', '"'],
+  ["'", "'"],
+  ['【', '】'],
+  ['[', ']'],
+  ['（', '）'],
+  ['(', ')']
+];
+
+const stripWrappingQuotes = (value: string) => {
+  let result = value.trim();
+  let matched = true;
+  while (matched && result.length > 1) {
+    matched = false;
+    for (const [open, close] of QUOTE_PAIRS) {
+      if (result.startsWith(open) && result.endsWith(close)) {
+        result = result.slice(open.length, result.length - close.length).trim();
+        matched = true;
+        break;
+      }
+    }
+  }
+  return result;
+};
+
+const normalizeMarkdownImageToken = (value: string) =>
+  value
+    .replace(/!\s*\[/, '![')
+    .replace(/\]\s*\(/, '](')
+    .trim();
+
+const extractStandaloneMarkdownImage = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (standaloneMarkdownImageRegex.test(trimmed)) {
+    return normalizeMarkdownImageToken(trimmed);
+  }
+  const unwrapped = stripWrappingQuotes(trimmed);
+  if (unwrapped !== trimmed && standaloneMarkdownImageRegex.test(unwrapped)) {
+    return normalizeMarkdownImageToken(unwrapped);
+  }
+  return null;
+};
+
+const appendPlainTextSegments = (text: string, collector: string[]) => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  const matches = trimmed.match(sentenceSegmentRegex);
+  if (matches) {
+    matches.forEach((match) => {
+      const segment = match.trim();
+      if (segment.length > 0) {
+        collector.push(segment);
+      }
+    });
+    return;
+  }
+  collector.push(trimmed);
+};
+
+const splitGroupSegmentText = (value: string): string[] => {
+  const normalized = value
+    .replace(/\r\n/g, '\n')
+    .replace(/!\s*\n\s*\[/g, '![')
+    .replace(/\]\s*\n\s*\(/g, '](')
+    .trim();
+  if (!normalized) {
+    return [];
+  }
+  const segments: string[] = [];
+  const paragraphs = normalized.split(/\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  paragraphs.forEach((paragraph) => {
+    const standaloneImage = extractStandaloneMarkdownImage(paragraph);
+    if (standaloneImage) {
+      segments.push(standaloneImage);
+      return;
+    }
+    markdownImageRegex.lastIndex = 0;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = markdownImageRegex.exec(paragraph)) !== null) {
+      const before = paragraph.slice(lastIndex, match.index);
+      appendPlainTextSegments(before, segments);
+      segments.push(normalizeMarkdownImageToken(match[0]));
+      lastIndex = match.index + match[0].length;
+    }
+    const remaining = paragraph.slice(lastIndex);
+    appendPlainTextSegments(remaining, segments);
+  });
+  return segments;
 };
 
 const sanitizeLabel = (value: string, fallback: string) => {
@@ -970,7 +1120,7 @@ const MessageBubble = ({
   }, [clearLongPress]);
 
   const trimmedContent = message.content.trim();
-  const stickerRegex = /\[([^\]]+)\]\(([^)]+)\)/gi;
+  const stickerRegex = /!?\[([^\]]+)\]\(([^)]+)\)/gi;
   type StickerMatch = {
     key: string;
     alt: string;
@@ -1061,7 +1211,42 @@ const MessageBubble = ({
     if (message.role !== 'assistant' || groupMembers.length === 0) {
       return null;
     }
-    return parseGroupAssistantMessage(trimmedContent, groupMembers);
+    const parsed = parseGroupAssistantMessage(trimmedContent, groupMembers);
+    const expanded: ParsedGroupReplySegment[] = [];
+    let lastAttributedSpeaker: ParsedGroupReplySegment | null = null;
+    parsed.forEach((segment) => {
+      const hasExplicitSpeaker = segment.name !== '群成员' || Boolean(segment.member);
+      const resolvedSegment =
+        !hasExplicitSpeaker && lastAttributedSpeaker
+          ? {
+              ...segment,
+              name: lastAttributedSpeaker.name,
+              member: lastAttributedSpeaker.member
+            }
+          : segment;
+      if (resolvedSegment.name !== '群成员' || resolvedSegment.member) {
+        lastAttributedSpeaker = resolvedSegment;
+      }
+      const sentences = splitGroupSegmentText(resolvedSegment.text);
+      if (sentences.length === 0) {
+        return;
+      }
+      if (sentences.length === 1) {
+        expanded.push({
+          ...resolvedSegment,
+          text: sentences[0]
+        });
+        return;
+      }
+      sentences.forEach((sentence, index) => {
+        expanded.push({
+          ...resolvedSegment,
+          key: `${resolvedSegment.key}-${index}`,
+          text: sentence
+        });
+      });
+    });
+    return expanded;
   }, [groupMembers, message.role, trimmedContent]);
   const hasGroupSegments = Boolean(groupReplySegments && groupReplySegments.length > 0);
 
@@ -1235,9 +1420,9 @@ const MessageBubble = ({
               draggable={false}
             />
           ))}
-          {textWithoutStickers.length > 0 ? (
+          {/* {textWithoutStickers.length > 0 ? (
             renderRichText(textWithoutStickers, 'block text-xs text-white/80')
-          ) : null}
+          ) : null} */}
         </div>
       ) : (
         renderRichText(message.content)
